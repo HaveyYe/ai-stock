@@ -1,0 +1,1 @@
+DINGTALK_WEBHOOK = "https://oapi.dingtalk.com/robot/send?access_token=e91a24b9c3adcd8c1899260c2a764c83f001b486444c20ce855be3c4adf411a3"
