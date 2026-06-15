@@ -9,9 +9,14 @@ __pycache__/
 # IDE
 .vscode/
 .idea/
+.trae/
 
 # Environment variables
 .env
 
 # Logs
 *.log
+
+# Temp/debug snapshots
+.tmp_*
+.real_snap_*

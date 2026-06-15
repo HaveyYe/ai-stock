@@ -1,0 +1,9 @@
+FIBONACCI_WINDOW = 120
+BOLLINGER_WINDOW = 20
+BOLLINGER_NUM_STD = 2.0
+KLINE_PERIOD_DAYS = 180
+SCORE_WEIGHTS = {
+    "value": 0.4,
+    "bollinger": 0.3,
+    "fibonacci": 0.3,
+}
