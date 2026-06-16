@@ -9,6 +9,7 @@ from src.ui.blocks import (
     render_analysis_grid,
     render_result_legend,
     render_score_hero,
+    render_technical_snapshot,
 )
 from src.ui.chart import render_chart
 from src.ui.report import build_report
@@ -125,6 +126,14 @@ def _render_analysis_bundle(bundle: AnalysisBundle) -> None:
     last_close = float(klines["close"].iloc[-1]) if not klines.empty else None
 
     st.markdown("---")
+    render_technical_snapshot(
+        bundle.kline_result,
+        bundle.bollinger_result,
+        bundle.fibonacci_result,
+        bundle.price_action_result,
+        bundle.data_quality,
+    )
+
     st.markdown("#### 🎯 综合诊断")
     render_score_hero(
         bundle.composite_result,
@@ -217,14 +226,6 @@ def _render_tech_leaderboard() -> None:
 st.set_page_config(page_title="股票多维分析系统", layout="wide")
 
 inject_dashboard_css()
-
-with st.sidebar:
-    st.markdown("##### 📡 数据源说明")
-    st.caption(
-        "行情：新浪财经 / 东方财富 / 腾讯（经 AKShare）。\n\n"
-        "若部署在海外服务器（如 Streamlit Cloud），国内行情接口可能因网络/区域限制不可达，"
-        "导致查询失败或基本面字段为空。建议在本地运行以获得最稳定体验。"
-    )
 
 st.markdown(
     "<div style='display:flex; align-items:center; gap:10px;'>"

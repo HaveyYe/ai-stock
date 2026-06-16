@@ -8,7 +8,7 @@ from src.analyzers.fibonacci_analyzer import FibonacciResult
 from src.analyzers.price_action_analyzer import PriceActionResult
 from src.analyzers.value_analyzer import ValueResult
 from src.scoring.composer import CompositeResult
-from src.types import DataQuality, Fundamentals, StockInfo
+from src.types import DataQuality, Fundamentals, KlineResult, StockInfo
 
 _CSS = """
 <style>
@@ -146,6 +146,67 @@ _CSS = """
     }
 }
 
+.aistock-tech-snapshot {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-left: 5px solid #0ea5e9;
+    border-radius: 12px;
+    padding: 14px 16px;
+    box-shadow: 0 1px 4px rgba(15,23,42,0.08);
+    margin-bottom: 14px;
+}
+.aistock-tech-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+.aistock-tech-title { font-size: 14px; font-weight: 800; color: #0f172a; }
+.aistock-tech-date { font-size: 12px; color: #64748b; }
+.aistock-tech-grid {
+    display: grid;
+    grid-template-columns: 1.25fr repeat(6, minmax(0, 1fr));
+    gap: 10px;
+}
+.aistock-tech-item {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 8px 10px;
+    min-width: 0;
+}
+.aistock-tech-label {
+    font-size: 10px;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    white-space: nowrap;
+}
+.aistock-tech-value {
+    margin-top: 2px;
+    font-size: 15px;
+    font-weight: 800;
+    color: #0f172a;
+    overflow-wrap: anywhere;
+}
+.aistock-tech-main .aistock-tech-value { font-size: 22px; line-height: 1.1; }
+.aistock-tech-sub { margin-top: 2px; font-size: 11px; color: #64748b; }
+@media (max-width: 1100px) {
+    .aistock-tech-grid {
+        grid-template-columns: 1fr 1fr 1fr;
+    }
+}
+@media (max-width: 640px) {
+    .aistock-tech-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+    .aistock-tech-main {
+        grid-column: 1 / -1;
+    }
+}
+
 [data-testid="stExpander"] {
     border-radius: 14px !important;
     border: 1px solid #e2e8f0 !important;
@@ -258,6 +319,163 @@ def _stat_cell(label: str, value_html: str) -> str:
 def _stat_grid(cells, cols: int = 2) -> str:
     tmpl = "aistock-grid-2" if cols == 2 else "aistock-grid-3"
     return f'<div class="aistock-grid {tmpl}">' + "".join(cells) + "</div>"
+
+
+def _plain_number(value, suffix: str = "", digits: int = 2, na: str = "—") -> str:
+    if value is None:
+        return na
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return na
+    if f != f:
+        return na
+    return f"{f:.{digits}f}{suffix}"
+
+
+def _signed_number(value, suffix: str = "", digits: int = 2, na: str = "—") -> str:
+    if value is None:
+        return na
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return na
+    if f != f:
+        return na
+    return f"{f:+.{digits}f}{suffix}"
+
+
+def _volume_text(value) -> str:
+    if value is None:
+        return "—"
+    try:
+        volume = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if volume != volume:
+        return "—"
+    if volume >= 100_000_000:
+        return f"{volume / 100_000_000:.2f}亿"
+    if volume >= 10_000:
+        return f"{volume / 10_000:.2f}万"
+    return f"{volume:.0f}"
+
+
+def _last_trade_date(klines, data_quality: Optional[DataQuality]) -> str:
+    if data_quality is not None and data_quality.latest_trade_date:
+        return data_quality.latest_trade_date
+    if klines is not None and not klines.empty and "date" in klines.columns:
+        latest = klines["date"].iloc[-1]
+        return latest.strftime("%Y-%m-%d") if hasattr(latest, "strftime") else str(latest)
+    return "未知"
+
+
+def build_technical_snapshot_html(
+    kline_result: KlineResult,
+    bollinger_result: BollingerResult,
+    fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
+    data_quality: Optional[DataQuality] = None,
+) -> str:
+    klines = kline_result.klines
+    date_text = _last_trade_date(klines, data_quality)
+    if klines is None or klines.empty:
+        return (
+            '<div class="aistock-tech-snapshot">'
+            '<div class="aistock-tech-head">'
+            '<div class="aistock-tech-title">技术快照</div>'
+            f'<div class="aistock-tech-date">最新交易日：{date_text}</div>'
+            '</div>'
+            '<div class="aistock-tech-sub">暂无可用行情数据</div>'
+            '</div>'
+        )
+
+    latest = klines.iloc[-1]
+    current = latest.get("close")
+    previous = klines["close"].iloc[-2] if len(klines) >= 2 and "close" in klines.columns else None
+    change = None
+    change_pct = None
+    try:
+        if previous is not None and float(previous) != 0:
+            change = float(current) - float(previous)
+            change_pct = change / float(previous) * 100
+    except (TypeError, ValueError):
+        change = None
+        change_pct = None
+
+    trend_color = "#16a34a"
+    try:
+        if change is not None and float(change) < 0:
+            trend_color = "#dc2626"
+    except (TypeError, ValueError):
+        pass
+
+    high_20 = klines["high"].tail(20).max() if "high" in klines.columns else None
+    low_20 = klines["low"].tail(20).min() if "low" in klines.columns else None
+    volume = latest.get("volume") if "volume" in klines.columns else None
+    pct_b = getattr(bollinger_result, "percent_b", None)
+    fib_pos = getattr(fibonacci_result, "position_ratio", None)
+    support = getattr(price_action_result, "support", None)
+    resistance = getattr(price_action_result, "resistance", None)
+
+    return (
+        '<div class="aistock-tech-snapshot">'
+        '<div class="aistock-tech-head">'
+        '<div class="aistock-tech-title">技术快照</div>'
+        f'<div class="aistock-tech-date">最新交易日：{date_text}</div>'
+        '</div>'
+        '<div class="aistock-tech-grid">'
+        '<div class="aistock-tech-item aistock-tech-main">'
+        '<div class="aistock-tech-label">当前股价</div>'
+        f'<div class="aistock-tech-value">{_plain_number(current)}</div>'
+        f'<div class="aistock-tech-sub" style="color:{trend_color};">{_signed_number(change)} / {_signed_number(change_pct, "%")}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">成交量</div>'
+        f'<div class="aistock-tech-value">{_volume_text(volume)}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">20日区间</div>'
+        f'<div class="aistock-tech-value">{_plain_number(low_20)} - {_plain_number(high_20)}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">支撑 / 压力</div>'
+        f'<div class="aistock-tech-value">{_plain_number(support)} / {_plain_number(resistance)}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">布林位置</div>'
+        f'<div class="aistock-tech-value">{_plain_number(pct_b, digits=2)}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">斐波位置</div>'
+        f'<div class="aistock-tech-value">{_plain_number(float(fib_pos) * 100 if fib_pos is not None else None, "%", digits=1)}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        '<div class="aistock-tech-label">价格结构</div>'
+        f'<div class="aistock-tech-value">{getattr(price_action_result, "trend", "") or "未知"}</div>'
+        '</div>'
+        '</div>'
+        '</div>'
+    )
+
+
+def render_technical_snapshot(
+    kline_result: KlineResult,
+    bollinger_result: BollingerResult,
+    fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
+    data_quality: Optional[DataQuality] = None,
+) -> None:
+    st.markdown(
+        build_technical_snapshot_html(
+            kline_result,
+            bollinger_result,
+            fibonacci_result,
+            price_action_result,
+            data_quality,
+        ),
+        unsafe_allow_html=True,
+    )
 
 
 def _gauge_figure(score: float, color: str) -> go.Figure:
