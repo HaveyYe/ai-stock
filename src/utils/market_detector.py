@@ -13,9 +13,11 @@ def detect_market(code: str) -> Market:
 
     c = _normalize(code)
 
+    us_pattern = r"[A-Z]{1,6}(\.[A-Z])?"
+
     if c.endswith(".US"):
         pure = c[:-3].strip()
-        if re.fullmatch(r"[A-Z]{1,6}", pure):
+        if re.fullmatch(us_pattern, pure):
             return Market.US
 
     if c.endswith(".HK"):
@@ -31,7 +33,7 @@ def detect_market(code: str) -> Market:
     if re.fullmatch(r"\d{5}", c):
         return Market.HK
 
-    if re.fullmatch(r"[A-Z]{1,6}", c):
+    if re.fullmatch(us_pattern, c):
         return Market.US
 
     raise ValueError(f"无法识别的股票代码: {code!r}")
@@ -61,7 +63,7 @@ def normalize_symbol(code: str, market: Market) -> str:
             pure = c[:-3].strip()
         else:
             pure = c
-        if not re.fullmatch(r"[A-Z]{1,6}", pure):
+        if not re.fullmatch(r"[A-Z]{1,6}(\.[A-Z])?", pure):
             raise ValueError(f"无效的美股代码: {code!r}")
         return pure
 

@@ -26,10 +26,12 @@ class TestBollingerAnalyzer(unittest.TestCase):
         closes = [100.0] * 24 + [50.0]
         result = analyze(make_df(closes))
         self.assertIsInstance(result, BollingerResult)
-        self.assertGreaterEqual(result.score, 75)
+        self.assertGreaterEqual(result.score, 55)
         self.assertTrue("超卖" in result.label or "接近下轨" in result.label)
         self.assertLess(result.percent_b, 0.2)
         self.assertTrue(len(result.signals) >= 1)
+        self.assertIn("不等同于趋势反转", " ".join(result.signals))
+        self.assertGreater(result.confidence, 0)
 
     def test_overbought_when_close_far_above_upper(self):
         closes = [100.0] * 24 + [150.0]
@@ -80,7 +82,7 @@ class TestBollingerAnalyzer(unittest.TestCase):
         closes = [100.0] * 29 + [50.0]
         result = analyze(make_df(closes), window=30, num_std=2.0)
         self.assertIsInstance(result, BollingerResult)
-        self.assertGreaterEqual(result.score, 75)
+        self.assertGreaterEqual(result.score, 55)
 
     def test_bandwidth_percentile_in_range(self):
         closes = [100.0] * 24 + [50.0]

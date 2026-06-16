@@ -2,7 +2,7 @@ import math
 import unittest
 
 from src.analyzers.value_analyzer import analyze
-from src.types import Fundamentals
+from src.types import Fundamentals, Market
 
 
 class TestValueAnalyzer(unittest.TestCase):
@@ -30,6 +30,8 @@ class TestValueAnalyzer(unittest.TestCase):
         result = analyze(Fundamentals(pe_ttm=12))
         self.assertEqual(result.score, 90)
         self.assertEqual(len(result.signals), 1)
+        self.assertLess(result.confidence, 0.5)
+        self.assertTrue(result.data_warnings)
 
     def test_signals_non_empty(self):
         result = analyze(Fundamentals(pe_ttm=10, pb=1.2, roe=20, dividend_yield=4))
@@ -52,6 +54,16 @@ class TestValueAnalyzer(unittest.TestCase):
         self.assertEqual(result.details["roe"], 20)
         self.assertIsNone(result.details["pb"])
         self.assertIsNone(result.details["profit_growth"])
+
+    def test_market_specific_pe_thresholds(self):
+        fundamentals = Fundamentals(pe_ttm=30, pb=4)
+
+        a_share = analyze(fundamentals, Market.A_SHARE)
+        us = analyze(fundamentals, Market.US)
+
+        self.assertLess(a_share.score, us.score)
+        self.assertIn("A股", a_share.signals[0])
+        self.assertIn("美股", us.signals[0])
 
 
 if __name__ == "__main__":

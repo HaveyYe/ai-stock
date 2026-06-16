@@ -1,6 +1,6 @@
 import unittest
 
-from src.types import Fundamentals, StockInfo, Market
+from src.types import DataQuality, Fundamentals, StockInfo, Market
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
@@ -68,10 +68,24 @@ def _make_fibonacci_result():
 def _make_composite_result():
     return CompositeResult(
         score=78,
-        action="买入",
-        action_en="Buy",
+        action="机会关注",
+        action_en="Opportunity",
         breakdown={"value": 85, "bollinger": 50, "fibonacci": 85},
         weights={"value": 0.4, "bollinger": 0.3, "fibonacci": 0.3},
+        confidence=0.82,
+        risk_level="中",
+        summary="多维评分偏积极，但仍需结合仓位和止损纪律。",
+        conflicts=["基本面较好，但技术指标尚未形成共振"],
+    )
+
+
+def _make_data_quality():
+    return DataQuality(
+        completeness=0.62,
+        kline_days=120,
+        latest_trade_date="2026-06-12",
+        missing_fundamentals=["ROE", "营收增长"],
+        warnings=["缺少部分基本面字段"],
     )
 
 
@@ -84,6 +98,7 @@ class TestReport(unittest.TestCase):
             _make_bollinger_result(),
             _make_fibonacci_result(),
             _make_composite_result(),
+            _make_data_quality(),
         )
 
     def test_returns_non_empty_string(self):
@@ -102,7 +117,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("风险提示", self.report)
 
     def test_contains_action(self):
-        self.assertIn("买入", self.report)
+        self.assertIn("机会关注", self.report)
 
     def test_market_cn_mapping(self):
         self.assertIn("A股", self.report)
@@ -128,7 +143,7 @@ class TestReport(unittest.TestCase):
             self.assertIn(label, self.report)
 
     def test_action_tip_present(self):
-        self.assertIn("注意仓位管理与止损", self.report)
+        self.assertIn("仍需确认趋势和控制仓位", self.report)
 
     def test_caution_action_tip(self):
         info = _make_info()
@@ -138,13 +153,16 @@ class TestReport(unittest.TestCase):
         f = _make_fibonacci_result()
         c = CompositeResult(
             score=25,
-            action="谨慎 / 回避",
-            action_en="Caution",
+            action="风险回避",
+            action_en="Avoid",
             breakdown={"value": 20, "bollinger": 25, "fibonacci": 30},
             weights={"value": 0.4, "bollinger": 0.3, "fibonacci": 0.3},
+            confidence=0.9,
+            risk_level="高",
+            summary="风险信号占优或数据可信度不足，暂不适合激进参与。",
         )
         report = build_report(info, fundamentals, v, b, f, c)
-        self.assertIn("短期规避，等待更好时机", report)
+        self.assertIn("风险信号占优，等待更好时机", report)
 
     def test_empty_signals_show_placeholder(self):
         v = ValueResult(score=50, label="估值合理", signals=[], details={})
@@ -157,6 +175,17 @@ class TestReport(unittest.TestCase):
             _make_composite_result(),
         )
         self.assertIn("暂无", report)
+
+    def test_contains_data_quality_and_conflicts(self):
+        self.assertIn("数据质量", self.report)
+        self.assertIn("完整度：62%", self.report)
+        self.assertIn("缺失基本面字段：ROE、营收增长", self.report)
+        self.assertIn("冲突信号", self.report)
+        self.assertIn("技术指标尚未形成共振", self.report)
+
+    def test_contains_confidence_and_risk(self):
+        self.assertIn("置信度", self.report)
+        self.assertIn("风险等级", self.report)
 
 
 if __name__ == "__main__":

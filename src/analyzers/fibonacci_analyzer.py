@@ -16,6 +16,9 @@ class FibonacciResult:
     position_ratio: float = 0.0
     label: str = ""
     signals: List[str] = field(default_factory=list)
+    confidence: float = 1.0
+    data_warnings: List[str] = field(default_factory=list)
+    interpretation: str = ""
 
 
 def analyze(klines, window=None) -> FibonacciResult:
@@ -54,37 +57,37 @@ def analyze(klines, window=None) -> FibonacciResult:
 
     p = position_ratio
     if 0.5 <= p <= 0.618:
-        score = 85
-        label = "黄金支撑区"
-        signals = ["价格处于斐波那契 50%-61.8% 黄金支撑区，看多"]
+        score = 66
+        label = "黄金区观察"
+        signals = ["价格处于斐波那契 50%-61.8% 区间，存在支撑观察价值"]
     elif 0.382 <= p < 0.5:
-        score = 70
+        score = 60
         label = "偏支撑区"
-        signals = ["价格接近 38.2% 回撤位，下方支撑较强"]
+        signals = ["价格接近 38.2% 区间，下方支撑需结合量价确认"]
     elif 0.618 < p <= 0.786:
-        score = 65
-        label = "支撑区下沿"
-        signals = ["价格在 61.8%-78.6% 区间，仍处支撑带"]
+        score = 58
+        label = "上方压力区"
+        signals = ["价格在 61.8%-78.6% 区间，接近区间上沿，追高性价比下降"]
     elif 0.236 <= p < 0.382:
         score = 50
         label = "中段"
         signals = ["价格处于 23.6%-38.2% 中段，方向不明"]
     elif 0 <= p < 0.236:
-        score = 40
-        label = "接近前高"
-        signals = ["价格接近 0% 回撤位（前高），上行阻力增大"]
+        score = 42
+        label = "接近区间低位"
+        signals = ["价格接近区间低位，反弹空间存在但弱势风险仍高"]
     elif 0.786 < p <= 1.0:
-        score = 35
+        score = 36
         label = "接近前高"
-        signals = ["价格在 78.6% 以上，接近前高，谨慎追高"]
+        signals = ["价格在 78.6% 以上，接近区间高位，谨慎追高"]
     elif p > 1.0:
-        score = 25
+        score = 44
         label = "突破前高"
-        signals = ["价格突破区间高点（0%），追高风险"]
+        signals = ["价格突破区间高点，需观察突破有效性，追高风险同步上升"]
     else:
         score = 20
         label = "跌破前低"
-        signals = ["价格跌破区间低点（100%），弱势"]
+        signals = ["价格跌破区间低点，弱势风险较高"]
 
     nearest_level = min(levels.values(), key=lambda lv: abs(lv - current_price))
     pct = round((current_price - nearest_level) / nearest_level * 100, 1)
@@ -93,6 +96,23 @@ def analyze(klines, window=None) -> FibonacciResult:
     )
 
     score = int(round(score))
+    data_warnings: List[str] = []
+    if len(klines) < window:
+        data_warnings.append(f"斐波那契样本少于 {window} 日，区间高低点稳定性不足")
+    if swing_high == swing_low:
+        data_warnings.append("区间高低点相同，斐波那契位置参考性降低")
+
+    confidence = 0.85 if not data_warnings else 0.6
+    if p < 0:
+        interpretation = "价格跌破观察区间，斐波那契支撑已失效。"
+    elif p > 1:
+        interpretation = "价格突破观察区间，需用成交量和回踩确认突破有效性。"
+    elif 0.5 <= p <= 0.618:
+        interpretation = "价格位于常见回撤观察区，但只代表位置优势，不代表趋势已反转。"
+    elif p >= 0.786:
+        interpretation = "价格接近区间高位，收益风险比下降。"
+    else:
+        interpretation = "价格位于区间内部，斐波那契给出的方向信号有限。"
 
     return FibonacciResult(
         score=score,
@@ -103,4 +123,7 @@ def analyze(klines, window=None) -> FibonacciResult:
         position_ratio=position_ratio,
         label=label,
         signals=signals,
+        confidence=confidence,
+        data_warnings=data_warnings,
+        interpretation=interpretation,
     )

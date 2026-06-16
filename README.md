@@ -4,7 +4,15 @@
 
 ## 运行
 
+要求 Python 3.10+。如果系统默认 `python` 指向 Python 2，请显式使用 `python3`。
+
 ```bash
-pip install -r requirements.txt
+python3 -m pip install -r requirements.txt
 streamlit run app.py
+```
+
+## 测试
+
+```bash
+python3 -m unittest discover -s tests -p 'test_*.py'
 ```

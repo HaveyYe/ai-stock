@@ -10,6 +10,7 @@ from src.types import (
     FundamentalsResult,
     KlineResult,
     Market,
+    StockSearchResult,
     StockInfo,
 )
 
@@ -33,11 +34,13 @@ def _make_klines(n: int = 30) -> pd.DataFrame:
 
 class FakeProvider(DataProvider):
     def __init__(self, code: str = "600519"):
+        self.requested_codes = []
         self._info = StockInfo(
             code=code, symbol=code, name="测试股票", market=Market.A_SHARE
         )
 
     def get_klines(self, code: str) -> KlineResult:
+        self.requested_codes.append(code)
         return KlineResult(info=self._info, klines=_make_klines(30))
 
     def get_fundamentals(self, code: str) -> FundamentalsResult:
@@ -45,6 +48,19 @@ class FakeProvider(DataProvider):
             info=self._info,
             fundamentals=Fundamentals(pe_ttm=12.0, pb=2.0),
         )
+
+    def search_symbols(self, query: str, limit: int = 10):
+        if query == "测试股票":
+            return [
+                StockSearchResult(
+                    code="600519",
+                    symbol="600519",
+                    name="测试股票",
+                    market=Market.A_SHARE,
+                    score=100,
+                )
+            ]
+        return []
 
 
 class TestRunAnalysis(unittest.TestCase):
@@ -81,6 +97,21 @@ class TestRunAnalysis(unittest.TestCase):
         self.assertEqual(
             set(breakdown.keys()), {"value", "bollinger", "fibonacci"}
         )
+
+    def test_data_quality_present(self):
+        quality = self.bundle.data_quality
+
+        self.assertGreaterEqual(quality.completeness, 0)
+        self.assertLessEqual(quality.completeness, 1)
+        self.assertEqual(quality.kline_days, 30)
+        self.assertIn("ROE", quality.missing_fundamentals)
+        self.assertTrue(quality.warnings)
+
+    def test_resolves_name_query_before_analysis(self):
+        provider = FakeProvider("600519")
+        run_analysis("测试股票", provider=provider)
+
+        self.assertEqual(provider.requested_codes[0], "600519")
 
 
 class TestInsufficientKlines(unittest.TestCase):

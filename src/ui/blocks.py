@@ -7,7 +7,7 @@ from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
 from src.analyzers.value_analyzer import ValueResult
 from src.scoring.composer import CompositeResult
-from src.types import Fundamentals, StockInfo
+from src.types import DataQuality, Fundamentals, StockInfo
 
 _CSS = """
 <style>
@@ -224,7 +224,12 @@ def _gauge_figure(score: float, color: str) -> go.Figure:
     return fig
 
 
-def render_score_hero(composite: CompositeResult, info: StockInfo, last_close: Optional[float]) -> None:
+def render_score_hero(
+    composite: CompositeResult,
+    info: StockInfo,
+    last_close: Optional[float],
+    data_quality: Optional[DataQuality] = None,
+) -> None:
     score = int(round(float(composite.score)))
     color = _score_color(score)
     action = composite.action
@@ -240,6 +245,25 @@ def render_score_hero(composite: CompositeResult, info: StockInfo, last_close: O
 
     breakdown = composite.breakdown or {}
     weights = composite.weights or {}
+    conflicts = composite.conflicts or composite.signal_conflicts or []
+    confidence = max(0.0, min(1.0, float(getattr(composite, "confidence", 1.0))))
+    risk_level = getattr(composite, "risk_level", "中")
+    summary = getattr(composite, "summary", "")
+    conflict_html = (
+        "".join(f"<li>{item}</li>" for item in conflicts)
+        if conflicts
+        else "<li>暂无明显冲突</li>"
+    )
+    if data_quality is None:
+        quality_html = "<span>数据质量 <b>未提供</b></span>"
+    else:
+        latest = data_quality.latest_trade_date or "未知"
+        quality_html = (
+            f"<span>数据完整度 <b>{data_quality.completeness * 100:.0f}%</b></span>"
+            f"<span>行情 <b>{data_quality.kline_days}</b> 日</span>"
+            f"<span>最新交易日 <b>{latest}</b></span>"
+            f"<span>缺失字段 <b>{len(data_quality.missing_fundamentals)}</b></span>"
+        )
 
     st.markdown(
         f"""
@@ -251,11 +275,20 @@ def render_score_hero(composite: CompositeResult, info: StockInfo, last_close: O
                     {(' · 最新价 <b style="color:#0f172a">' + f'{last_close:.2f}' + '</b>') if last_close else ''}</div>
                     <div style="margin-top:14px;">
                         <span class="aistock-action-badge" style="background:{color};">{action}</span>
+                        <span style="display:inline-block; margin-left:8px; font-size:13px; color:#475569;">风险等级 <b style="color:#0f172a;">{risk_level}</b> · 置信度 <b style="color:#0f172a;">{confidence * 100:.0f}%</b></span>
                     </div>
+                    <div style="margin-top:10px; font-size:13px; color:#475569; line-height:1.5;">{summary}</div>
                     <div style="margin-top:14px; display:flex; gap:18px; font-size:12px; color:#475569;">
                         <span>价值 <b>{int(round(breakdown.get('value', 0)))}</b> · 权重 {int(weights.get('value',0)*100)}%</span>
                         <span>布林带 <b>{int(round(breakdown.get('bollinger', 0)))}</b> · 权重 {int(weights.get('bollinger',0)*100)}%</span>
                         <span>斐波那契 <b>{int(round(breakdown.get('fibonacci', 0)))}</b> · 权重 {int(weights.get('fibonacci',0)*100)}%</span>
+                    </div>
+                    <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:#475569;">
+                        {quality_html}
+                    </div>
+                    <div style="margin-top:12px; font-size:12px; color:#475569;">
+                        <div style="font-weight:700; color:#0f172a; margin-bottom:4px;">冲突信号</div>
+                        <ul style="margin:0; padding-left:18px; line-height:1.7;">{conflict_html}</ul>
                     </div>
                 </div>
                 <div style="width:240px;">
@@ -283,6 +316,8 @@ def _value_card_html(value_result: ValueResult, fundamentals: Fundamentals) -> s
         + stats
         + f'<div style="margin-top:12px;"><div class="aistock-section-label">估值评分</div>'
         + _progress_html(score, color)
+        + f'<div style="font-size:11px; color:#64748b; margin-top:4px;">置信度 {float(getattr(value_result, "confidence", 1.0))*100:.0f}%</div>'
+        + f'<div style="font-size:12px; color:#475569; margin-top:8px; line-height:1.45;">{getattr(value_result, "interpretation", "")}</div>'
         + f"</div>"
         + f'<div style="margin-top:auto; padding-top:12px;"><div class="aistock-section-label aistock-section-label-bold">信号</div>'
         + _signal_list(value_result.signals, accent)
@@ -343,6 +378,8 @@ def _bollinger_card_html(result: BollingerResult) -> str:
         f'<div class="aistock-card-body">'
         + stats
         + track_html
+        + f'<div style="font-size:11px; color:#64748b; margin-top:6px;">置信度 {float(getattr(result, "confidence", 1.0))*100:.0f}%</div>'
+        + f'<div style="font-size:12px; color:#475569; margin-top:8px; line-height:1.45;">{getattr(result, "interpretation", "")}</div>'
         + f'<div style="margin-top:auto; padding-top:12px;"><div class="aistock-section-label aistock-section-label-bold">信号</div>'
         + _signal_list(result.signals, accent)
         + "</div>"
@@ -380,12 +417,12 @@ def _fibonacci_card_html(result: FibonacciResult) -> str:
 
     track_html = (
         f'<div style="margin-top:12px;">'
-        f'<div class="aistock-track-label"><span>0% (高点)</span><span>50%</span><span>100% (低点)</span></div>'
+        f'<div class="aistock-track-label"><span>0% (低点)</span><span>50%</span><span>100% (高点)</span></div>'
         f'<div class="aistock-track">'
         f'<div class="aistock-track-zone" style="left:50%; width:11.8%;"></div>'
         f'<div class="aistock-track-cursor" style="left:calc({cursor_pos:.1f}% - 2px); background:#8b5cf6;"></div>'
         f'</div>'
-        f'<div style="font-size:11px; color:#64748b; margin-top:2px;">当前位于：<b style="color:#8b5cf6;">{pos_text}</b>（紫框=黄金支撑区 50%-61.8%）</div>'
+        f'<div style="font-size:11px; color:#64748b; margin-top:2px;">当前位于：<b style="color:#8b5cf6;">{pos_text}</b>（紫框=50%-61.8% 观察区）</div>'
         f'</div>'
     )
 
@@ -413,6 +450,8 @@ def _fibonacci_card_html(result: FibonacciResult) -> str:
         + stats
         + track_html
         + levels_html
+        + f'<div style="font-size:11px; color:#64748b; margin-top:6px;">置信度 {float(getattr(result, "confidence", 1.0))*100:.0f}%</div>'
+        + f'<div style="font-size:12px; color:#475569; margin-top:8px; line-height:1.45;">{getattr(result, "interpretation", "")}</div>'
         + f'<div style="margin-top:auto; padding-top:12px;"><div class="aistock-section-label aistock-section-label-bold">信号</div>'
         + _signal_list(result.signals, accent)
         + "</div>"

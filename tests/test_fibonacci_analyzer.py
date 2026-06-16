@@ -25,17 +25,18 @@ class TestFibonacciAnalyzer(unittest.TestCase):
         prices = [150] * 125 + [195, 105, 155]
         df = make_df(prices)
         result = analyze(df)
-        self.assertEqual(result.score, 85)
-        self.assertIn("黄金支撑", result.label)
+        self.assertEqual(result.score, 66)
+        self.assertIn("黄金区", result.label)
         self.assertAlmostEqual(result.position_ratio, 0.55, places=2)
         self.assertEqual(result.swing_high, 200)
         self.assertEqual(result.swing_low, 100)
+        self.assertIn("不代表趋势已反转", result.interpretation)
 
     def test_near_high_score_40(self):
         prices = [150] * 125 + [195, 105]
         df = make_df(prices)
         result = analyze(df)
-        self.assertEqual(result.score, 40)
+        self.assertEqual(result.score, 42)
         self.assertAlmostEqual(result.position_ratio, 0.05, places=2)
 
     def test_breakout_score_25(self):
@@ -43,8 +44,9 @@ class TestFibonacciAnalyzer(unittest.TestCase):
         df = make_df(prices)
         df.loc[df.index[-1], "close"] = 210
         result = analyze(df)
-        self.assertEqual(result.score, 25)
+        self.assertEqual(result.score, 44)
         self.assertAlmostEqual(result.position_ratio, 1.1, places=2)
+        self.assertIn("突破有效性", result.interpretation)
 
     def test_levels_keys_and_values(self):
         prices = [150] * 125 + [195, 105, 155]

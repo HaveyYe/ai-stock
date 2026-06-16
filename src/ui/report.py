@@ -1,7 +1,7 @@
 from typing import Optional
 
 from src import config
-from src.types import Fundamentals, StockInfo
+from src.types import DataQuality, Fundamentals, StockInfo
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
@@ -25,10 +25,10 @@ _FIB_LEVELS = [
 ]
 
 _ACTION_TIPS = {
-    "买入": "当前评分较高，注意仓位管理与止损纪律。",
-    "持有 / 逢低加仓": "建议分批建仓，控制单次加仓比例。",
-    "观望": "保持观望，等待趋势或估值更明朗后再行决策。",
-    "谨慎 / 回避": "短期规避，等待更好时机。",
+    "机会关注": "当前仅代表机会值得跟踪，仍需确认趋势和控制仓位。",
+    "谨慎观察": "等待趋势或估值更明朗后再行决策。",
+    "中性观察": "保持观察，避免在信号不共振时激进参与。",
+    "风险回避": "风险信号占优，等待更好时机。",
 }
 
 
@@ -68,6 +68,7 @@ def build_report(
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
     composite_result: CompositeResult,
+    data_quality: Optional[DataQuality] = None,
 ) -> str:
     name = getattr(info, "name", "")
     code = getattr(info, "code", "")
@@ -78,6 +79,10 @@ def build_report(
     action_en = getattr(composite_result, "action_en", "")
     breakdown = getattr(composite_result, "breakdown", {}) or {}
     weights = getattr(composite_result, "weights", {}) or {}
+    confidence = getattr(composite_result, "confidence", 1.0)
+    risk_level = getattr(composite_result, "risk_level", "中")
+    summary = getattr(composite_result, "summary", "")
+    conflicts = getattr(composite_result, "conflicts", []) or getattr(composite_result, "signal_conflicts", []) or []
 
     v_score = breakdown.get("value", 0)
     b_score = breakdown.get("bollinger", 0)
@@ -116,8 +121,12 @@ def build_report(
     lines.append("")
     lines.append(
         f"**市场**：{market_cn}  **综合评分**：{score}/100  "
-        f"**建议**：{action}（{action_en}）"
+        f"**结论**：{action}（{action_en}）  "
+        f"**置信度**：{float(confidence) * 100:.0f}%  **风险等级**：{risk_level}"
     )
+    if summary:
+        lines.append("")
+        lines.append(f"**结论摘要**：{summary}")
     lines.append("")
     lines.append("---")
     lines.append("")
@@ -133,6 +142,23 @@ def build_report(
         f"- 斐波那契：{f_score} 分（权重 {w_fibonacci * 100:.0f}%）"
     )
     lines.append(f"- **加权综合分：{score} → {action}**")
+    lines.append(f"- 综合置信度：{float(confidence) * 100:.0f}%")
+    lines.append(f"- 风险等级：{risk_level}")
+    if conflicts:
+        lines.append("- 冲突信号：")
+        lines.extend(f"  - {item}" for item in conflicts)
+    else:
+        lines.append("- 冲突信号：暂无明显冲突")
+    if data_quality is not None:
+        missing = "、".join(data_quality.missing_fundamentals) if data_quality.missing_fundamentals else "无"
+        warnings = data_quality.warnings or []
+        lines.append("- 数据质量：")
+        lines.append(f"  - 完整度：{data_quality.completeness * 100:.0f}%")
+        lines.append(f"  - 行情样本：{data_quality.kline_days} 日")
+        lines.append(f"  - 最新交易日：{data_quality.latest_trade_date or '数据不可用'}")
+        lines.append(f"  - 缺失基本面字段：{missing}")
+        if warnings:
+            lines.append("  - 数据提示：" + "；".join(warnings))
     lines.append("")
 
     lines.append(f"## 二、价值分析（{value_label}）")
@@ -142,6 +168,9 @@ def build_report(
     lines.append(f"- 股息率：{_fmt_num(dy, '%')}")
     lines.append(f"- 营收同比增长：{_fmt_num(rg, '%')}")
     lines.append(f"- 净利润同比增长：{_fmt_num(pg, '%')}")
+    lines.append(f"- 置信度：{float(getattr(value_result, 'confidence', 1.0)) * 100:.0f}%")
+    if getattr(value_result, "interpretation", ""):
+        lines.append(f"- 解读：{value_result.interpretation}")
     lines.append("- 信号解读：")
     lines.append(_fmt_signals(getattr(value_result, "signals", [])))
     lines.append("")
@@ -159,6 +188,9 @@ def build_report(
     else:
         bw_full = f"{bw_text}，历史分位 {float(bandwidth_percentile) * 100:.0f}%"
     lines.append(f"- 带宽：{bw_full}")
+    lines.append(f"- 置信度：{float(getattr(bollinger_result, 'confidence', 1.0)) * 100:.0f}%")
+    if getattr(bollinger_result, "interpretation", ""):
+        lines.append(f"- 解读：{bollinger_result.interpretation}")
     lines.append("- 信号解读：")
     lines.append(_fmt_signals(getattr(bollinger_result, "signals", [])))
     lines.append("")
@@ -179,6 +211,9 @@ def build_report(
     for ratio, label in _FIB_LEVELS:
         price = levels.get(ratio, None)
         lines.append(f"  - {label} → {_fmt_num(price)}")
+    lines.append(f"- 置信度：{float(getattr(fibonacci_result, 'confidence', 1.0)) * 100:.0f}%")
+    if getattr(fibonacci_result, "interpretation", ""):
+        lines.append(f"- 解读：{fibonacci_result.interpretation}")
     lines.append("- 信号解读：")
     lines.append(_fmt_signals(getattr(fibonacci_result, "signals", [])))
     lines.append("")

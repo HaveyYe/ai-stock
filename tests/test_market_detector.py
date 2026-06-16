@@ -41,6 +41,9 @@ class TestDetectMarket(unittest.TestCase):
     def test_us_msft(self):
         self.assertEqual(detect_market("MSFT"), Market.US)
 
+    def test_us_class_share_with_dot(self):
+        self.assertEqual(detect_market("BRK.B"), Market.US)
+
     def test_invalid_code_raises(self):
         with self.assertRaises(ValueError):
             detect_market("INVALID")
@@ -72,6 +75,9 @@ class TestNormalizeSymbol(unittest.TestCase):
 
     def test_us_symbol_with_suffix(self):
         self.assertEqual(normalize_symbol("AAPL.US", Market.US), "AAPL")
+
+    def test_us_class_share_symbol(self):
+        self.assertEqual(normalize_symbol("BRK.B", Market.US), "BRK.B")
 
 
 if __name__ == "__main__":
