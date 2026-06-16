@@ -5,6 +5,7 @@ import streamlit as st
 
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.price_action_analyzer import PriceActionResult
 from src.analyzers.value_analyzer import ValueResult
 from src.scoring.composer import CompositeResult
 from src.types import DataQuality, Fundamentals, StockInfo
@@ -17,14 +18,19 @@ _CSS = """
 
 .aistock-cards-row {
     display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 14px;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
     align-items: stretch;
 }
 .aistock-cards-row > .aistock-card {
     height: 100%;
     display: flex;
     flex-direction: column;
+}
+@media (max-width: 900px) {
+    .aistock-cards-row {
+        grid-template-columns: 1fr;
+    }
 }
 
 .aistock-card {
@@ -98,6 +104,47 @@ _CSS = """
 
 .aistock-section-label { font-size: 11px; color: #64748b; margin-bottom: 4px; }
 .aistock-section-label-bold { font-weight: 600; }
+.aistock-legend {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 14px 0 16px 0;
+}
+.aistock-legend-item {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-left: 5px solid var(--legend-color);
+    border-radius: 10px;
+    padding: 10px 12px;
+    min-height: 84px;
+}
+.aistock-legend-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 800;
+    color: #0f172a;
+}
+.aistock-legend-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    background: var(--legend-color);
+    flex: 0 0 auto;
+}
+.aistock-legend-range { margin-top: 4px; font-size: 11px; color: #64748b; font-weight: 700; }
+.aistock-legend-desc { margin-top: 4px; font-size: 12px; color: #475569; line-height: 1.45; }
+@media (max-width: 900px) {
+    .aistock-legend {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+@media (max-width: 560px) {
+    .aistock-legend {
+        grid-template-columns: 1fr;
+    }
+}
 
 [data-testid="stExpander"] {
     border-radius: 14px !important;
@@ -148,6 +195,26 @@ def _score_color(score: float) -> str:
     if score >= 40:
         return "#f59e0b"
     return "#dc2626"
+
+
+def render_result_legend() -> None:
+    items = [
+        ("机会关注", "75-100 分", "#16a34a", "多维信号偏积极，可以重点跟踪，但仍要看确认和仓位。"),
+        ("谨慎观察", "60-74 分", "#2563eb", "部分维度有机会，确认度不够，适合等待更清晰的量价配合。"),
+        ("中性观察", "40-59 分", "#f59e0b", "信号不共振，方向优势有限，保持观察更稳妥。"),
+        ("风险回避", "0-39 分", "#dc2626", "风险信号占优或数据可信度不足，不适合激进参与。"),
+    ]
+    html = ['<div class="aistock-legend">']
+    for title, score_range, color, desc in items:
+        html.append(
+            f'<div class="aistock-legend-item" style="--legend-color:{color};">'
+            f'<div class="aistock-legend-title"><span class="aistock-legend-dot"></span>{title}</div>'
+            f'<div class="aistock-legend-range">{score_range}</div>'
+            f'<div class="aistock-legend-desc">{desc}</div>'
+            f'</div>'
+        )
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
 
 
 def _fmt(value, suffix: str = "", digits: int = 2, na: str = "—") -> str:
@@ -282,6 +349,7 @@ def render_score_hero(
                         <span>价值 <b>{int(round(breakdown.get('value', 0)))}</b> · 权重 {int(weights.get('value',0)*100)}%</span>
                         <span>布林带 <b>{int(round(breakdown.get('bollinger', 0)))}</b> · 权重 {int(weights.get('bollinger',0)*100)}%</span>
                         <span>斐波那契 <b>{int(round(breakdown.get('fibonacci', 0)))}</b> · 权重 {int(weights.get('fibonacci',0)*100)}%</span>
+                        <span>Price Action <b>{int(round(breakdown.get('price_action', 0)))}</b> · 权重 {int(weights.get('price_action',0)*100)}%</span>
                     </div>
                     <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:#475569;">
                         {quality_html}
@@ -470,10 +538,64 @@ def _fibonacci_card_html(result: FibonacciResult) -> str:
     )
 
 
+def _price_action_card_html(result: PriceActionResult) -> str:
+    score = int(round(float(result.score)))
+    color = _score_color(score)
+    accent = "#f97316"
+
+    stats = _stat_grid([
+        _stat_cell("当前价", _fmt(result.current_price)),
+        _stat_cell("结构", result.trend or "未知"),
+        _stat_cell("支撑", _fmt(result.support)),
+        _stat_cell("压力", _fmt(result.resistance)),
+    ], cols=2)
+
+    pos = max(0.0, min(1.0, float(getattr(result, "range_position", 0.5))))
+    cursor_pos = pos * 100.0
+    volume_ratio = getattr(result, "volume_ratio", None)
+    volume_text = "无量能数据" if volume_ratio is None else f"量比 {float(volume_ratio):.2f}"
+    risks = getattr(result, "risks", []) or []
+    signal_html = _signal_list(result.signals, accent)
+    risk_html = _signal_list(risks, "#ef4444") if risks else _signal_list(["暂无明显价格行为风险"], "#cbd5e1")
+
+    track_html = (
+        f'<div style="margin-top:12px;">'
+        f'<div class="aistock-track-label"><span>支撑</span><span>区间中部</span><span>压力</span></div>'
+        f'<div class="aistock-track">'
+        f'<div class="aistock-track-cursor" style="left:calc({cursor_pos:.1f}% - 2px); background:#f97316;"></div>'
+        f'</div>'
+        f'<div style="font-size:11px; color:#64748b; margin-top:2px;">状态：<b style="color:#0f172a;">{result.breakout_state}</b> · {volume_text}</div>'
+        f'</div>'
+    )
+
+    body = (
+        f'<div class="aistock-card-body">'
+        + stats
+        + track_html
+        + f'<div style="font-size:11px; color:#64748b; margin-top:6px;">置信度 {float(getattr(result, "confidence", 1.0))*100:.0f}%</div>'
+        + f'<div style="font-size:12px; color:#475569; margin-top:8px; line-height:1.45;">{getattr(result, "interpretation", "")}</div>'
+        + f'<div style="margin-top:12px;"><div class="aistock-section-label aistock-section-label-bold">信号</div>{signal_html}</div>'
+        + f'<div style="margin-top:auto; padding-top:12px;"><div class="aistock-section-label aistock-section-label-bold">风险</div>{risk_html}</div>'
+        + "</div>"
+    )
+
+    return (
+        f'<div class="aistock-card" style="--accent:{accent};">'
+        f'<div class="aistock-card-head">'
+        f'<div><div class="aistock-card-title">Price Action</div>'
+        f'<div class="aistock-card-sub">{result.label}</div></div>'
+        f'<div class="aistock-score-chip" style="background:{color};">{score}</div>'
+        f'</div>'
+        f'{body}'
+        f'</div>'
+    )
+
+
 def render_analysis_grid(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
     fundamentals: Fundamentals,
 ) -> None:
     html = (
@@ -481,6 +603,7 @@ def render_analysis_grid(
         + _value_card_html(value_result, fundamentals)
         + _bollinger_card_html(bollinger_result)
         + _fibonacci_card_html(fibonacci_result)
+        + _price_action_card_html(price_action_result)
         + '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)

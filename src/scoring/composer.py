@@ -5,6 +5,7 @@ from src import config
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.price_action_analyzer import PriceActionResult
 
 
 @dataclass
@@ -22,7 +23,7 @@ class CompositeResult:
 
 
 def _normalized_weights(weights: Dict[str, float]) -> Dict[str, float]:
-    keys = ("value", "bollinger", "fibonacci")
+    keys = ("value", "bollinger", "fibonacci", "price_action")
     cleaned = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
     total = sum(cleaned.values())
     if total <= 0:
@@ -42,21 +43,35 @@ def _find_conflicts(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
 ) -> List[str]:
     conflicts: List[str] = []
     v_score = float(value_result.score)
     b_score = float(bollinger_result.score)
     f_score = float(fibonacci_result.score)
+    p_score = float(price_action_result.score)
 
-    if v_score >= 70 and (b_score <= 40 or f_score <= 40):
+    if v_score >= 70 and (b_score <= 40 or f_score <= 40 or p_score <= 40):
         conflicts.append("基本面较好，但至少一个技术指标提示短线风险")
-    if v_score <= 40 and (b_score >= 60 or f_score >= 60):
+    if v_score <= 40 and (b_score >= 60 or f_score >= 60 or p_score >= 60):
         conflicts.append("技术位置出现机会，但基本面评分偏弱")
     if "超买" in getattr(bollinger_result, "label", "") and f_score <= 45:
         conflicts.append("布林带偏超买且斐波那契接近压力区，追高风险较高")
+    if p_score >= 70 and b_score <= 40:
+        conflicts.append("价格行为偏强，但布林带提示短线过热")
+    if p_score <= 35 and (b_score >= 60 or f_score >= 55):
+        conflicts.append("位置指标出现机会，但价格行为仍处弱势结构")
+    if getattr(price_action_result, "breakout_state", "") == "向上突破" and getattr(price_action_result, "volume_ratio", None) is not None:
+        if float(price_action_result.volume_ratio) < 1.1:
+            conflicts.append("价格突破缺少成交量确认，假突破风险较高")
     if _confidence(value_result) < 0.5:
         conflicts.append("基本面数据不足，估值结论可信度偏低")
-    if min(_confidence(value_result), _confidence(bollinger_result), _confidence(fibonacci_result)) < 0.5:
+    if min(
+        _confidence(value_result),
+        _confidence(bollinger_result),
+        _confidence(fibonacci_result),
+        _confidence(price_action_result),
+    ) < 0.5:
         conflicts.append("至少一个分析维度数据置信度偏低")
 
     return conflicts
@@ -66,25 +81,34 @@ def compose(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
 ) -> CompositeResult:
     weights = _normalized_weights(dict(config.SCORE_WEIGHTS))
     w_value = float(weights.get("value", 0.0))
     w_bollinger = float(weights.get("bollinger", 0.0))
     w_fibonacci = float(weights.get("fibonacci", 0.0))
+    w_price_action = float(weights.get("price_action", 0.0))
 
     v_score = float(value_result.score)
     b_score = float(bollinger_result.score)
     f_score = float(fibonacci_result.score)
+    p_score = float(price_action_result.score)
 
-    raw = v_score * w_value + b_score * w_bollinger + f_score * w_fibonacci
+    raw = (
+        v_score * w_value
+        + b_score * w_bollinger
+        + f_score * w_fibonacci
+        + p_score * w_price_action
+    )
     score = max(0.0, min(100.0, raw))
     score = round(score)
 
-    conflicts = _find_conflicts(value_result, bollinger_result, fibonacci_result)
+    conflicts = _find_conflicts(value_result, bollinger_result, fibonacci_result, price_action_result)
     confidence = (
         _confidence(value_result) * w_value
         + _confidence(bollinger_result) * w_bollinger
         + _confidence(fibonacci_result) * w_fibonacci
+        + _confidence(price_action_result) * w_price_action
     )
     if conflicts:
         confidence *= max(0.65, 1 - 0.1 * len(conflicts))
@@ -123,6 +147,7 @@ def compose(
         "value": v_score,
         "bollinger": b_score,
         "fibonacci": f_score,
+        "price_action": p_score,
     }
 
     return CompositeResult(

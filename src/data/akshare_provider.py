@@ -55,6 +55,12 @@ def _date_range_dashed() -> tuple[str, str]:
     return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
 
 
+def _date_range_compact() -> tuple[str, str]:
+    end = datetime.now()
+    start = end - timedelta(days=KLINE_PERIOD_DAYS)
+    return start.strftime("%Y%m%d"), end.strftime("%Y%m%d")
+
+
 def _to_float(value) -> Optional[float]:
     if value is None:
         return None
@@ -124,6 +130,7 @@ class AkShareProvider(DataProvider):
         self._snap_cache: dict[str, _TxSnapshot] = {}
         self._resolved_name_cache: dict[str, str] = {}
         self._search_cache: Optional[list[StockSearchResult]] = None
+        self._market_search_cache: dict[Market, list[StockSearchResult]] = {}
         self._session = requests.Session()
         if disable_proxy:
             self._session.trust_env = False
@@ -164,6 +171,47 @@ class AkShareProvider(DataProvider):
     def _static_alias_catalog(self) -> list[StockSearchResult]:
         return _alias_results(Market.HK, _HK_ALIAS_ROWS) + _alias_results(Market.US, _US_ALIAS_ROWS)
 
+    def _resolve_direct_search_result(self, direct: StockSearchResult) -> StockSearchResult:
+        if direct.market is Market.US:
+            return direct
+
+        for item in self._static_alias_catalog():
+            if item.market is direct.market and item.symbol == direct.symbol:
+                return StockSearchResult(
+                    code=direct.code,
+                    symbol=direct.symbol,
+                    name=item.name,
+                    market=direct.market,
+                    score=direct.score,
+                )
+
+        for item in self._market_catalog(direct.market):
+            if item.market is direct.market and item.symbol == direct.symbol:
+                return StockSearchResult(
+                    code=direct.code,
+                    symbol=direct.symbol,
+                    name=item.name,
+                    market=direct.market,
+                    score=direct.score,
+                )
+        return direct
+
+    def _market_catalog(self, market: Market) -> list[StockSearchResult]:
+        if self._search_cache is not None:
+            return [item for item in self._search_cache if item.market is market]
+        if market in self._market_search_cache:
+            return self._market_search_cache[market]
+
+        if market is Market.A_SHARE:
+            rows = self._load_a_share_catalog()
+        elif market is Market.HK:
+            rows = self._load_hk_catalog()
+        else:
+            rows = []
+
+        self._market_search_cache[market] = _dedupe_results(rows)
+        return self._market_search_cache[market]
+
     def _load_a_share_catalog(self) -> list[StockSearchResult]:
         try:
             df = ak.stock_info_a_code_name()
@@ -198,9 +246,13 @@ class AkShareProvider(DataProvider):
         if not q:
             return []
 
+        alias = _exact_static_alias_result(q)
+        if alias is not None:
+            return [alias]
+
         direct = _direct_code_result(q)
         if direct is not None:
-            return [direct]
+            return [self._resolve_direct_search_result(direct)]
 
         q_norm = _normalize_query(q)
         static_scored = _score_catalog(q_norm, self._static_alias_catalog())
@@ -304,6 +356,44 @@ class AkShareProvider(DataProvider):
                 ) from e
             raise
 
+    def _fetch_a_share_klines(self, symbol: str) -> pd.DataFrame:
+        errors: list[Exception] = []
+
+        try:
+            start, end = _date_range_dashed()
+            df = ak.stock_zh_a_daily(
+                symbol=_a_share_sina_symbol(symbol),
+                start_date=start,
+                end_date=end,
+                adjust="qfq",
+            )
+            if df is not None and not df.empty:
+                return df
+        except Exception as e:
+            errors.append(e)
+
+        try:
+            start, end = _date_range_compact()
+            df = ak.stock_zh_a_hist(
+                symbol=symbol,
+                period="daily",
+                start_date=start,
+                end_date=end,
+                adjust="qfq",
+                timeout=10,
+            )
+            if df is not None and not df.empty:
+                return df
+            return df
+        except Exception as e:
+            if errors:
+                first = errors[0]
+                raise RuntimeError(
+                    f"新浪 A股源失败: {type(first).__name__}: {first}; "
+                    f"东方财富备用源失败: {type(e).__name__}: {e}"
+                ) from e
+            raise
+
     def get_klines(self, code: str) -> KlineResult:
         market = detect_market(code)
         symbol = normalize_symbol(code, market)
@@ -312,14 +402,7 @@ class AkShareProvider(DataProvider):
 
         try:
             if market is Market.A_SHARE:
-                sina_symbol = _a_share_sina_symbol(symbol)
-                start, end = _date_range_dashed()
-                df = ak.stock_zh_a_daily(
-                    symbol=sina_symbol,
-                    start_date=start,
-                    end_date=end,
-                    adjust="qfq",
-                )
+                df = self._fetch_a_share_klines(symbol)
             elif market is Market.HK:
                 df = ak.stock_hk_daily(symbol=symbol, adjust="qfq")
             elif market is Market.US:
@@ -500,6 +583,22 @@ def _direct_code_result(query: str) -> Optional[StockSearchResult]:
         market=market,
         score=120.0,
     )
+
+
+def _exact_static_alias_result(query: str) -> Optional[StockSearchResult]:
+    q_norm = _normalize_query(query)
+    for market, rows in ((Market.HK, _HK_ALIAS_ROWS), (Market.US, _US_ALIAS_ROWS)):
+        for symbol, name, aliases in rows:
+            candidates = [_display_code(symbol, market), symbol, *aliases]
+            if q_norm in {_normalize_query(candidate) for candidate in candidates}:
+                return StockSearchResult(
+                    code=_display_code(symbol, market),
+                    symbol=symbol,
+                    name=name,
+                    market=market,
+                    score=125.0,
+                )
+    return None
 
 
 def _alias_results(market: Market, rows: list[tuple[str, str, list[str]]]) -> list[StockSearchResult]:

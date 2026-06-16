@@ -4,6 +4,11 @@ from src.scoring.composer import CompositeResult, compose
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.price_action_analyzer import PriceActionResult
+
+
+def _p(score=80, **kwargs):
+    return PriceActionResult(score=score, label=kwargs.pop("label", "价格行为偏强"), **kwargs)
 
 
 class TestComposer(unittest.TestCase):
@@ -11,7 +16,7 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=85, label="估值偏低", signals=[], details={})
         b = BollingerResult(score=80)
         f = FibonacciResult(score=82)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(84))
 
         self.assertIsInstance(result, CompositeResult)
         self.assertEqual(result.score, 83)
@@ -23,9 +28,9 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=25, label="估值偏高", signals=[], details={})
         b = BollingerResult(score=20)
         f = FibonacciResult(score=22)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(20))
 
-        self.assertEqual(result.score, 23)
+        self.assertEqual(result.score, 22)
         self.assertEqual(result.action, "风险回避")
         self.assertEqual(result.action_en, "Avoid")
 
@@ -33,7 +38,7 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=65, label="估值合理", signals=[], details={})
         b = BollingerResult(score=60)
         f = FibonacciResult(score=62)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(64))
 
         self.assertEqual(result.score, 63)
         self.assertEqual(result.action, "谨慎观察")
@@ -43,7 +48,7 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=50, label="估值合理", signals=[], details={})
         b = BollingerResult(score=45)
         f = FibonacciResult(score=42)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(45))
 
         self.assertEqual(result.score, 46)
         self.assertEqual(result.action, "中性观察")
@@ -53,29 +58,30 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=85, label="估值偏低", signals=[], details={})
         b = BollingerResult(score=80)
         f = FibonacciResult(score=82)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(84))
 
-        self.assertEqual(set(result.breakdown.keys()), {"value", "bollinger", "fibonacci"})
+        self.assertEqual(set(result.breakdown.keys()), {"value", "bollinger", "fibonacci", "price_action"})
         self.assertEqual(result.breakdown["value"], 85)
         self.assertEqual(result.breakdown["bollinger"], 80)
         self.assertEqual(result.breakdown["fibonacci"], 82)
+        self.assertEqual(result.breakdown["price_action"], 84)
 
     def test_weights_equal_config(self):
         v = ValueResult(score=85, label="估值偏低", signals=[], details={})
         b = BollingerResult(score=80)
         f = FibonacciResult(score=82)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(84))
 
         self.assertEqual(
             result.weights,
-            {"value": 0.4, "bollinger": 0.3, "fibonacci": 0.3},
+            {"value": 0.32, "bollinger": 0.23, "fibonacci": 0.2, "price_action": 0.25},
         )
 
     def test_score_clamped_within_range(self):
         v = ValueResult(score=200, label="异常", signals=[], details={})
         b = BollingerResult(score=200)
         f = FibonacciResult(score=200)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(200))
 
         self.assertLessEqual(result.score, 100)
         self.assertGreaterEqual(result.score, 0)
@@ -84,7 +90,7 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=85, label="估值偏低", signals=[], details={})
         b = BollingerResult(score=30, label="超买")
         f = FibonacciResult(score=35)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(30))
 
         self.assertTrue(result.conflicts)
         self.assertLess(result.confidence, 1.0)
@@ -94,7 +100,7 @@ class TestComposer(unittest.TestCase):
         v = ValueResult(score=95, label="估值偏低", signals=[], details={}, confidence=0.2)
         b = BollingerResult(score=90, confidence=0.3)
         f = FibonacciResult(score=90, confidence=0.3)
-        result = compose(v, b, f)
+        result = compose(v, b, f, _p(90, confidence=0.3))
 
         self.assertNotEqual(result.action, "机会关注")
         self.assertLess(result.confidence, 0.65)
@@ -103,14 +109,15 @@ class TestComposer(unittest.TestCase):
         old = dict(__import__("src.config", fromlist=["SCORE_WEIGHTS"]).SCORE_WEIGHTS)
         try:
             config = __import__("src.config", fromlist=["SCORE_WEIGHTS"])
-            config.SCORE_WEIGHTS = {"value": 0, "bollinger": 0, "fibonacci": 0}
+            config.SCORE_WEIGHTS = {"value": 0, "bollinger": 0, "fibonacci": 0, "price_action": 0}
             result = compose(
                 ValueResult(score=90, label="", signals=[], details={}),
                 BollingerResult(score=60),
                 FibonacciResult(score=30),
+                _p(20),
             )
-            self.assertEqual(result.weights, {"value": 1 / 3, "bollinger": 1 / 3, "fibonacci": 1 / 3})
-            self.assertEqual(result.score, 60)
+            self.assertEqual(result.weights, {"value": 0.25, "bollinger": 0.25, "fibonacci": 0.25, "price_action": 0.25})
+            self.assertEqual(result.score, 50)
         finally:
             __import__("src.config", fromlist=["SCORE_WEIGHTS"]).SCORE_WEIGHTS = old
 

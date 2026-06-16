@@ -5,6 +5,7 @@ from src.types import DataQuality, Fundamentals, StockInfo
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.price_action_analyzer import PriceActionResult
 from src.scoring.composer import CompositeResult
 
 
@@ -67,6 +68,7 @@ def build_report(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
     composite_result: CompositeResult,
     data_quality: Optional[DataQuality] = None,
 ) -> str:
@@ -87,9 +89,11 @@ def build_report(
     v_score = breakdown.get("value", 0)
     b_score = breakdown.get("bollinger", 0)
     f_score = breakdown.get("fibonacci", 0)
+    p_score = breakdown.get("price_action", 0)
     w_value = float(weights.get("value", 0.0))
     w_bollinger = float(weights.get("bollinger", 0.0))
     w_fibonacci = float(weights.get("fibonacci", 0.0))
+    w_price_action = float(weights.get("price_action", 0.0))
 
     pe = getattr(fundamentals, "pe_ttm", None)
     pb = getattr(fundamentals, "pb", None)
@@ -101,6 +105,7 @@ def build_report(
     value_label = getattr(value_result, "label", "")
     bollinger_label = getattr(bollinger_result, "label", "")
     fibonacci_label = getattr(fibonacci_result, "label", "")
+    price_action_label = getattr(price_action_result, "label", "")
 
     upper = getattr(bollinger_result, "upper", None)
     middle = getattr(bollinger_result, "middle", None)
@@ -114,6 +119,14 @@ def build_report(
     current_price = getattr(fibonacci_result, "current_price", None)
     position_ratio = getattr(fibonacci_result, "position_ratio", None)
     levels = getattr(fibonacci_result, "levels", {}) or {}
+    pa_support = getattr(price_action_result, "support", None)
+    pa_resistance = getattr(price_action_result, "resistance", None)
+    pa_current = getattr(price_action_result, "current_price", None)
+    pa_trend = getattr(price_action_result, "trend", "")
+    pa_state = getattr(price_action_result, "breakout_state", "")
+    pa_range_position = getattr(price_action_result, "range_position", None)
+    pa_body_ratio = getattr(price_action_result, "body_ratio", None)
+    pa_volume_ratio = getattr(price_action_result, "volume_ratio", None)
 
     lines = []
 
@@ -140,6 +153,9 @@ def build_report(
     )
     lines.append(
         f"- 斐波那契：{f_score} 分（权重 {w_fibonacci * 100:.0f}%）"
+    )
+    lines.append(
+        f"- Price Action：{p_score} 分（权重 {w_price_action * 100:.0f}%）"
     )
     lines.append(f"- **加权综合分：{score} → {action}**")
     lines.append(f"- 综合置信度：{float(confidence) * 100:.0f}%")
@@ -218,7 +234,28 @@ def build_report(
     lines.append(_fmt_signals(getattr(fibonacci_result, "signals", [])))
     lines.append("")
 
-    lines.append("## 五、风险提示")
+    lines.append(f"## 五、Price Action（{price_action_label}）")
+    lines.append(f"- 当前价：{_fmt_num(pa_current)}")
+    lines.append(f"- 价格结构：{pa_trend or '数据不可用'}")
+    lines.append(f"- 支撑 / 压力：{_fmt_num(pa_support)} / {_fmt_num(pa_resistance)}")
+    if pa_range_position is None:
+        pa_pos_text = "数据不可用"
+    else:
+        pa_pos_text = f"{float(pa_range_position) * 100:.1f}%"
+    lines.append(f"- 区间位置：{pa_pos_text}")
+    lines.append(f"- 突破状态：{pa_state or '数据不可用'}")
+    lines.append(f"- 实体占比：{_fmt_num(pa_body_ratio)}")
+    lines.append(f"- 成交量确认：{_fmt_num(pa_volume_ratio)}")
+    lines.append(f"- 置信度：{float(getattr(price_action_result, 'confidence', 1.0)) * 100:.0f}%")
+    if getattr(price_action_result, "interpretation", ""):
+        lines.append(f"- 解读：{price_action_result.interpretation}")
+    lines.append("- 信号解读：")
+    lines.append(_fmt_signals(getattr(price_action_result, "signals", [])))
+    lines.append("- 风险提示：")
+    lines.append(_fmt_signals(getattr(price_action_result, "risks", [])))
+    lines.append("")
+
+    lines.append("## 六、风险提示")
     lines.append("- 本报告由程序根据公开数据自动生成，仅供参考，不构成投资建议。")
     lines.append("- 技术指标存在滞后性，请结合宏观环境与公司基本面综合判断。")
     lines.append(f"- {_action_tip(action)}")

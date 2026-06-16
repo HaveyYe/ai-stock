@@ -4,6 +4,7 @@ from src.types import DataQuality, Fundamentals, StockInfo, Market
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.price_action_analyzer import PriceActionResult
 from src.scoring.composer import CompositeResult
 from src.ui.report import build_report
 
@@ -65,13 +66,32 @@ def _make_fibonacci_result():
     )
 
 
+def _make_price_action_result():
+    return PriceActionResult(
+        score=72,
+        label="价格行为偏强",
+        trend="上升结构",
+        support=95.0,
+        resistance=112.0,
+        current_price=108.0,
+        range_position=0.76,
+        breakout_state="接近压力",
+        body_ratio=0.55,
+        volume_ratio=1.25,
+        signals=["价格结构：上升结构"],
+        risks=["价格接近近期压力区，追高性价比下降"],
+        confidence=0.88,
+        interpretation="趋势结构和短线行为偏积极。",
+    )
+
+
 def _make_composite_result():
     return CompositeResult(
         score=78,
         action="机会关注",
         action_en="Opportunity",
-        breakdown={"value": 85, "bollinger": 50, "fibonacci": 85},
-        weights={"value": 0.4, "bollinger": 0.3, "fibonacci": 0.3},
+        breakdown={"value": 85, "bollinger": 50, "fibonacci": 85, "price_action": 72},
+        weights={"value": 0.32, "bollinger": 0.23, "fibonacci": 0.2, "price_action": 0.25},
         confidence=0.82,
         risk_level="中",
         summary="多维评分偏积极，但仍需结合仓位和止损纪律。",
@@ -97,6 +117,7 @@ class TestReport(unittest.TestCase):
             _make_value_result(),
             _make_bollinger_result(),
             _make_fibonacci_result(),
+            _make_price_action_result(),
             _make_composite_result(),
             _make_data_quality(),
         )
@@ -114,6 +135,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("价值分析", self.report)
         self.assertIn("布林带", self.report)
         self.assertIn("斐波那契", self.report)
+        self.assertIn("Price Action", self.report)
         self.assertIn("风险提示", self.report)
 
     def test_contains_action(self):
@@ -133,10 +155,12 @@ class TestReport(unittest.TestCase):
         idx_value = self.report.find("## 一、综合评分")
         idx_bollinger = self.report.find("## 三、技术形态 - 布林带")
         idx_fib = self.report.find("## 四、技术形态 - 斐波那契")
-        idx_risk = self.report.find("## 五、风险提示")
+        idx_pa = self.report.find("## 五、Price Action")
+        idx_risk = self.report.find("## 六、风险提示")
         self.assertLess(idx_value, idx_bollinger)
         self.assertLess(idx_bollinger, idx_fib)
-        self.assertLess(idx_fib, idx_risk)
+        self.assertLess(idx_fib, idx_pa)
+        self.assertLess(idx_pa, idx_risk)
 
     def test_fibonacci_levels_all_present(self):
         for label in ["0.0%", "23.6%", "38.2%", "50.0%", "61.8%", "78.6%", "100.0%"]:
@@ -155,13 +179,13 @@ class TestReport(unittest.TestCase):
             score=25,
             action="风险回避",
             action_en="Avoid",
-            breakdown={"value": 20, "bollinger": 25, "fibonacci": 30},
-            weights={"value": 0.4, "bollinger": 0.3, "fibonacci": 0.3},
+            breakdown={"value": 20, "bollinger": 25, "fibonacci": 30, "price_action": 22},
+            weights={"value": 0.32, "bollinger": 0.23, "fibonacci": 0.2, "price_action": 0.25},
             confidence=0.9,
             risk_level="高",
             summary="风险信号占优或数据可信度不足，暂不适合激进参与。",
         )
-        report = build_report(info, fundamentals, v, b, f, c)
+        report = build_report(info, fundamentals, v, b, f, _make_price_action_result(), c)
         self.assertIn("风险信号占优，等待更好时机", report)
 
     def test_empty_signals_show_placeholder(self):
@@ -172,6 +196,7 @@ class TestReport(unittest.TestCase):
             v,
             _make_bollinger_result(),
             _make_fibonacci_result(),
+            _make_price_action_result(),
             _make_composite_result(),
         )
         self.assertIn("暂无", report)
@@ -186,6 +211,11 @@ class TestReport(unittest.TestCase):
     def test_contains_confidence_and_risk(self):
         self.assertIn("置信度", self.report)
         self.assertIn("风险等级", self.report)
+
+    def test_contains_price_action_details(self):
+        self.assertIn("上升结构", self.report)
+        self.assertIn("支撑 / 压力", self.report)
+        self.assertIn("追高性价比下降", self.report)
 
 
 if __name__ == "__main__":

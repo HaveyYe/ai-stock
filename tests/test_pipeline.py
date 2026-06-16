@@ -60,6 +60,16 @@ class FakeProvider(DataProvider):
                     score=100,
                 )
             ]
+        if query.upper() == "APPLE":
+            return [
+                StockSearchResult(
+                    code="AAPL",
+                    symbol="AAPL",
+                    name="苹果 Apple",
+                    market=Market.US,
+                    score=125,
+                )
+            ]
         return []
 
 
@@ -85,6 +95,9 @@ class TestRunAnalysis(unittest.TestCase):
     def test_fibonacci_result_not_none(self):
         self.assertIsNotNone(self.bundle.fibonacci_result)
 
+    def test_price_action_result_not_none(self):
+        self.assertIsNotNone(self.bundle.price_action_result)
+
     def test_info_code_matches(self):
         self.assertEqual(self.bundle.info.code, "600519")
 
@@ -95,7 +108,7 @@ class TestRunAnalysis(unittest.TestCase):
     def test_breakdown_keys_present(self):
         breakdown = self.bundle.composite_result.breakdown
         self.assertEqual(
-            set(breakdown.keys()), {"value", "bollinger", "fibonacci"}
+            set(breakdown.keys()), {"value", "bollinger", "fibonacci", "price_action"}
         )
 
     def test_data_quality_present(self):
@@ -112,6 +125,12 @@ class TestRunAnalysis(unittest.TestCase):
         run_analysis("测试股票", provider=provider)
 
         self.assertEqual(provider.requested_codes[0], "600519")
+
+    def test_resolves_company_name_that_looks_like_us_symbol_before_analysis(self):
+        provider = FakeProvider("AAPL")
+        run_analysis("APPLE", provider=provider)
+
+        self.assertEqual(provider.requested_codes[0], "AAPL")
 
 
 class TestInsufficientKlines(unittest.TestCase):

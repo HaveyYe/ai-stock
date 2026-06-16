@@ -4,6 +4,7 @@ from src.types import DataQuality, Fundamentals, KlineResult, StockInfo
 from src.analyzers.value_analyzer import ValueResult, analyze as analyze_value
 from src.analyzers.bollinger_analyzer import BollingerResult, analyze as analyze_bollinger
 from src.analyzers.fibonacci_analyzer import FibonacciResult, analyze as analyze_fibonacci
+from src.analyzers.price_action_analyzer import PriceActionResult, analyze as analyze_price_action
 from src.scoring.composer import CompositeResult, compose
 from src.data.provider import DataProvider
 from src.utils.market_detector import detect_market, normalize_symbol
@@ -17,6 +18,7 @@ class AnalysisBundle:
     value_result: ValueResult
     bollinger_result: BollingerResult
     fibonacci_result: FibonacciResult
+    price_action_result: PriceActionResult
     composite_result: CompositeResult
     data_quality: DataQuality
 
@@ -37,6 +39,7 @@ def _build_data_quality(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
+    price_action_result: PriceActionResult,
 ) -> DataQuality:
     raw_fields = {
         "pe_ttm": fundamentals.pe_ttm,
@@ -60,7 +63,7 @@ def _build_data_quality(
         latest_trade_date = latest.strftime("%Y-%m-%d") if hasattr(latest, "strftime") else str(latest)
 
     warnings = []
-    for result in (value_result, bollinger_result, fibonacci_result):
+    for result in (value_result, bollinger_result, fibonacci_result, price_action_result):
         warnings.extend(getattr(result, "data_warnings", []) or [])
     if kline_days < 120:
         warnings.append("行情数据少于 120 日，长期位置判断参考性降低")
@@ -80,13 +83,14 @@ def _resolve_query(query: str, provider: DataProvider) -> str:
     if not raw:
         raise ValueError("请输入股票代码或名称")
 
+    matches = provider.search_symbols(raw, limit=1)
+    if matches:
+        return matches[0].code
+
     try:
         market = detect_market(raw)
         return normalize_symbol(raw, market)
     except ValueError:
-        matches = provider.search_symbols(raw, limit=1)
-        if matches:
-            return matches[0].code
         raise ValueError(f"未找到匹配股票：{query}，请尝试输入更完整的代码或名称")
 
 
@@ -104,14 +108,16 @@ def run_analysis(code: str, provider: DataProvider = None) -> AnalysisBundle:
     value_result = analyze_value(fund_result.fundamentals, kline_result.info.market)
     bollinger_result = analyze_bollinger(klines)
     fibonacci_result = analyze_fibonacci(klines)
+    price_action_result = analyze_price_action(klines)
 
-    composite_result = compose(value_result, bollinger_result, fibonacci_result)
+    composite_result = compose(value_result, bollinger_result, fibonacci_result, price_action_result)
     data_quality = _build_data_quality(
         fund_result.fundamentals,
         kline_result,
         value_result,
         bollinger_result,
         fibonacci_result,
+        price_action_result,
     )
 
     return AnalysisBundle(
@@ -121,6 +127,7 @@ def run_analysis(code: str, provider: DataProvider = None) -> AnalysisBundle:
         value_result=value_result,
         bollinger_result=bollinger_result,
         fibonacci_result=fibonacci_result,
+        price_action_result=price_action_result,
         composite_result=composite_result,
         data_quality=data_quality,
     )
