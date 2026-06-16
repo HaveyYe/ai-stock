@@ -93,6 +93,47 @@ class TestAkShareProviderSideEffects(unittest.TestCase):
         self.assertIn("Nokia", result.info.name)
         self.assertFalse(result.klines.empty)
 
+    def test_us_klines_falls_back_to_yahoo_when_akshare_ssl_fails(self):
+        module = importlib.import_module("src.data.akshare_provider")
+        provider = module.AkShareProvider()
+        provider._fetch_snapshot = lambda market, symbol: module._TxSnapshot(name="Mobileye")
+
+        class FakeResponse:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "chart": {
+                        "result": [
+                            {
+                                "timestamp": [1704067200, 1704153600],
+                                "indicators": {
+                                    "quote": [
+                                        {
+                                            "open": [40.0, 41.0],
+                                            "high": [42.0, 43.0],
+                                            "low": [39.0, 40.0],
+                                            "close": [41.0, 42.0],
+                                            "volume": [1000, 1200],
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                        "error": None,
+                    }
+                }
+
+        with patch.object(module.ak, "stock_us_daily", side_effect=requests.exceptions.SSLError("boom")):
+            with patch.object(provider._session, "get", return_value=FakeResponse()):
+                result = provider.get_klines("MBLY")
+
+        self.assertEqual(result.info.code, "MBLY")
+        self.assertEqual(result.info.name, "Mobileye")
+        self.assertEqual(len(result.klines), 2)
+        self.assertEqual(float(result.klines["close"].iloc[-1]), 42.0)
+
 
 if __name__ == "__main__":
     unittest.main()

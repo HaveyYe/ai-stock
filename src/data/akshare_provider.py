@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from difflib import SequenceMatcher
+import time
 from typing import Optional
 
 import akshare as ak
@@ -280,6 +281,29 @@ class AkShareProvider(DataProvider):
             return None
         return None
 
+    def _fetch_us_klines(self, symbol: str) -> pd.DataFrame:
+        errors: list[Exception] = []
+        for kwargs in ({"adjust": "qfq"}, {}):
+            try:
+                df = ak.stock_us_daily(symbol=symbol, **kwargs)
+                if df is not None and not df.empty:
+                    return df
+            except Exception as e:
+                errors.append(e)
+
+        try:
+            return _fetch_yahoo_chart(self._session, symbol)
+        except ValueError:
+            raise
+        except Exception as e:
+            if errors:
+                first = errors[0]
+                raise RuntimeError(
+                    f"AKShare 美股源失败: {type(first).__name__}: {first}; "
+                    f"Yahoo 备用源失败: {type(e).__name__}: {e}"
+                ) from e
+            raise
+
     def get_klines(self, code: str) -> KlineResult:
         market = detect_market(code)
         symbol = normalize_symbol(code, market)
@@ -299,12 +323,7 @@ class AkShareProvider(DataProvider):
             elif market is Market.HK:
                 df = ak.stock_hk_daily(symbol=symbol, adjust="qfq")
             elif market is Market.US:
-                try:
-                    df = ak.stock_us_daily(symbol=symbol, adjust="qfq")
-                    if df is None or df.empty:
-                        raise ValueError("empty qfq data")
-                except (ValueError, AttributeError, TypeError):
-                    df = ak.stock_us_daily(symbol=symbol)
+                df = self._fetch_us_klines(symbol)
             else:
                 raise ValueError(f"不支持的市场类型: {market!r}")
         except (IndexError, KeyError, ValueError) as e:
@@ -394,6 +413,64 @@ def _network_hint(market: Market) -> str:
         f"若部署在海外服务器（如 Streamlit Cloud），{source_cn} 等国内行情接口可能因网络/区域限制不可达，"
         f"可稍后重试或在本地运行。"
     )
+
+
+def _fetch_yahoo_chart(session: requests.Session, symbol: str) -> pd.DataFrame:
+    end = int(time.time())
+    start = end - KLINE_PERIOD_DAYS * 2 * 86400
+    response = session.get(
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+        params={
+            "period1": start,
+            "period2": end,
+            "interval": "1d",
+            "events": "history",
+            "includeAdjustedClose": "true",
+        },
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=10,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    chart = payload.get("chart", {})
+    error = chart.get("error")
+    if error:
+        description = error.get("description") if isinstance(error, dict) else str(error)
+        raise ValueError(description or "Yahoo chart error")
+
+    results = chart.get("result") or []
+    if not results:
+        raise ValueError("Yahoo chart returned no result")
+
+    result = results[0]
+    timestamps = result.get("timestamp") or []
+    quote_rows = (result.get("indicators", {}).get("quote") or [{}])[0]
+    adj_rows = result.get("indicators", {}).get("adjclose") or []
+    adjclose = adj_rows[0].get("adjclose") if adj_rows else None
+    close_values = adjclose or quote_rows.get("close") or []
+
+    rows = []
+    for index, ts in enumerate(timestamps):
+        row = {
+            "date": datetime.fromtimestamp(ts),
+            "open": _nth(quote_rows.get("open"), index),
+            "high": _nth(quote_rows.get("high"), index),
+            "low": _nth(quote_rows.get("low"), index),
+            "close": _nth(close_values, index),
+            "volume": _nth(quote_rows.get("volume"), index) or 0,
+        }
+        if all(row[field] is not None for field in ("open", "high", "low", "close")):
+            rows.append(row)
+
+    if not rows:
+        raise ValueError("Yahoo chart returned empty price rows")
+    return pd.DataFrame(rows)
+
+
+def _nth(values, index: int):
+    if not values or index >= len(values):
+        return None
+    return values[index]
 
 
 def default_provider() -> AkShareProvider:

@@ -29,6 +29,11 @@ def _search_symbols(query: str) -> list[StockSearchResult]:
     return _provider().search_symbols(query, limit=8)
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _run_analysis_cached(code: str):
+    return run_analysis(code, provider=_provider())
+
+
 def _format_result(result: StockSearchResult) -> str:
     market_cn = _MARKET_CN.get(result.market.value, result.market.value)
     return f"{result.name} · {result.code} · {market_cn}"
@@ -97,7 +102,7 @@ with st.container():
 if btn and selected_code:
     try:
         with st.spinner("正在获取数据并分析..."):
-            bundle = run_analysis(selected_code, provider=_provider())
+            bundle = _run_analysis_cached(selected_code)
     except ValueError:
         st.error(
             f"无法识别股票：{code}，请检查输入。"
