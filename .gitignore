@@ -20,3 +20,6 @@ __pycache__/
 # Temp/debug snapshots
 .tmp_*
 .real_snap_*
+
+# Local user portfolio data
+.aistock/
