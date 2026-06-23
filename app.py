@@ -104,39 +104,55 @@ def _resolve_first_stock(query: str) -> StockSearchResult | None:
     return matches[0] if matches else None
 
 
-def _render_sidebar_stock_picker(label: str, key_prefix: str) -> StockSearchResult | None:
+def _set_expander_open(expander_key: str) -> None:
+    st.session_state[expander_key] = True
+
+
+def _request_sidebar_submit(key_prefix: str, expander_key: str) -> None:
+    st.session_state[expander_key] = True
+    st.session_state[f"{key_prefix}_submit_requested"] = True
+
+
+def _clear_sidebar_picker(key_prefix: str) -> None:
+    for suffix in ("query", "choice", "last_query", "submit_requested"):
+        st.session_state.pop(f"{key_prefix}_{suffix}", None)
+
+
+def _render_sidebar_stock_picker(label: str, key_prefix: str, expander_key: str) -> tuple[StockSearchResult | None, bool]:
     query_key = f"{key_prefix}_query"
-    select_key = f"{key_prefix}_select"
-    query = st.session_state.get(query_key, "")
-    matches = _search_symbols(query) if query else []
-    selected = st.selectbox(
+    choice_key = f"{key_prefix}_choice"
+    last_query_key = f"{key_prefix}_last_query"
+    st.text_input(
         label,
-        matches,
-        index=0 if matches else None,
-        format_func=_format_search_option,
-        key=select_key,
+        key=query_key,
         placeholder="输入中文名、英文名或代码搜索股票",
-        accept_new_options=True,
-        filter_mode="fuzzy",
+        on_change=_request_sidebar_submit,
+        args=(key_prefix, expander_key),
     )
 
-    if isinstance(selected, StockSearchResult):
-        st.session_state[query_key] = selected.code
-        st.caption(f"已选择：**{_format_result(selected)}**")
-        return selected
+    query = str(st.session_state.get(query_key, "") or "").strip()
+    matches = _search_symbols(query) if query else []
+    visible_matches = matches[:5]
+    if query != st.session_state.get(last_query_key):
+        st.session_state[last_query_key] = query
+        st.session_state[choice_key] = 0
 
-    typed = str(selected or "").strip()
-    if typed and typed != query:
-        st.session_state[query_key] = typed
-        st.rerun()
-
-    typed_matches = _search_symbols(typed) if typed else []
-    if typed_matches:
-        st.caption(f"将保存：**{_format_result(typed_matches[0])}**")
-        return typed_matches[0]
-    if typed:
+    if visible_matches:
+        options = list(range(len(visible_matches)))
+        selected_index = st.radio(
+            "智能匹配",
+            options,
+            key=choice_key,
+            format_func=lambda idx: _format_result(visible_matches[idx]),
+            label_visibility="visible",
+        )
+        selected = visible_matches[int(selected_index)]
+        st.caption(f"将保存：**{_format_result(selected)}**")
+        return selected, bool(st.session_state.pop(f"{key_prefix}_submit_requested", False))
+    if query:
         st.caption("暂未匹配到股票，请输入更完整的中文名、英文名或代码")
-    return None
+    st.session_state.pop(f"{key_prefix}_submit_requested", None)
+    return None, False
 
 
 def _clear_portfolio_cache() -> None:
@@ -246,15 +262,29 @@ def _render_portfolio_sidebar() -> None:
             st.rerun()
 
         watchlist_count = len(state.watchlist) if state.watchlist else 0
-        with st.expander(f"我的自选（{watchlist_count}）", expanded=False):
-            result = _render_sidebar_stock_picker("股票代码或名称", "watchlist_add")
-            if st.button("加入自选", key="watchlist_add_btn", use_container_width=True, disabled=result is None):
+        watchlist_expander_key = "watchlist_expanded"
+        holding_expander_key = "holding_expanded"
+        with st.expander(f"我的自选（{watchlist_count}）", expanded=bool(st.session_state.get(watchlist_expander_key, False))):
+            flash = st.session_state.pop("watchlist_flash", None)
+            if flash:
+                st.success(flash)
+            result, enter_add = _render_sidebar_stock_picker("股票代码或名称", "watchlist_add", watchlist_expander_key)
+            button_add = st.button(
+                "加入自选",
+                key="watchlist_add_btn",
+                use_container_width=True,
+                disabled=result is None,
+                type="primary",
+            )
+            if button_add or enter_add:
+                st.session_state[watchlist_expander_key] = True
                 if result is None:
                     st.error("未匹配到股票，请输入更完整的代码或名称")
                 else:
                     add_watchlist_item(portfolio_item_from_search(result), path)
                     _clear_portfolio_cache()
-                    st.success(f"已加入：{_format_result(result)}")
+                    _clear_sidebar_picker("watchlist_add")
+                    st.session_state["watchlist_flash"] = f"已加入：{_format_result(result)}"
                     st.rerun()
 
             st.markdown("---")
@@ -266,12 +296,39 @@ def _render_portfolio_sidebar() -> None:
                 st.caption("还没有自选股")
 
         holdings_count = len(state.holdings) if state.holdings else 0
-        with st.expander(f"我的持仓（{holdings_count}）", expanded=False):
-            result = _render_sidebar_stock_picker("持仓股票代码或名称", "holding_add")
-            quantity = st.number_input("数量", min_value=0.0, value=0.0, step=1.0, key="holding_quantity")
-            cost_price = st.number_input("成本价", min_value=0.0, value=0.0, step=0.1, key="holding_cost")
+        with st.expander(f"我的持仓（{holdings_count}）", expanded=bool(st.session_state.get(holding_expander_key, False))):
+            flash = st.session_state.pop("holding_flash", None)
+            if flash:
+                st.success(flash)
+            result, enter_save = _render_sidebar_stock_picker("持仓股票代码或名称", "holding_add", holding_expander_key)
+            quantity = st.number_input(
+                "数量",
+                min_value=0.0,
+                value=0.0,
+                step=1.0,
+                key="holding_quantity",
+                on_change=_set_expander_open,
+                args=(holding_expander_key,),
+            )
+            cost_price = st.number_input(
+                "成本价",
+                min_value=0.0,
+                value=0.0,
+                step=0.1,
+                key="holding_cost",
+                on_change=_set_expander_open,
+                args=(holding_expander_key,),
+            )
             can_save_holding = result is not None and quantity > 0 and cost_price > 0
-            if st.button("保存持仓", key="holding_add_btn", use_container_width=True, disabled=not can_save_holding):
+            button_save = st.button(
+                "保存持仓",
+                key="holding_add_btn",
+                use_container_width=True,
+                disabled=not can_save_holding,
+                type="primary",
+            )
+            if button_save or (enter_save and can_save_holding):
+                st.session_state[holding_expander_key] = True
                 if result is None:
                     st.error("未匹配到股票，请输入更完整的代码或名称")
                 elif quantity <= 0 or cost_price <= 0:
@@ -279,7 +336,8 @@ def _render_portfolio_sidebar() -> None:
                 else:
                     upsert_holding_item(holding_item_from_search(result, quantity, cost_price), path)
                     _clear_portfolio_cache()
-                    st.success(f"已保存：{_format_result(result)}")
+                    _clear_sidebar_picker("holding_add")
+                    st.session_state["holding_flash"] = f"已保存：{_format_result(result)}"
                     st.rerun()
 
             st.markdown("---")

@@ -283,6 +283,20 @@ _CSS = """
     border-color: #60a5fa;
     box-shadow: 0 0 0 2px rgba(96,165,250,0.18);
 }
+[data-testid="stSidebar"] [role="radiogroup"] {
+    gap: 2px;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label {
+    background: #1f2937;
+    border: 1px solid #374151;
+    border-radius: 7px;
+    padding: 5px 7px;
+    margin-bottom: 3px;
+}
+[data-testid="stSidebar"] [role="radiogroup"] label:hover {
+    background: #263244;
+    border-color: #4b5563;
+}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary {
     padding: 16px 18px;
     border-radius: 10px;
