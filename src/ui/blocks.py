@@ -364,6 +364,23 @@ _CSS = """
     background: #263244;
     margin: 2px 0 3px 0;
 }
+.aistock-auth-wrap {
+    max-width: 520px;
+    margin: 56px auto 18px auto;
+    text-align: center;
+}
+.aistock-auth-title {
+    color: #f8fafc;
+    font-size: 34px;
+    font-weight: 900;
+    line-height: 1.2;
+}
+.aistock-auth-sub {
+    margin-top: 10px;
+    color: #94a3b8;
+    font-size: 15px;
+    line-height: 1.6;
+}
 </style>
 """
 

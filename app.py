@@ -1,15 +1,20 @@
 from html import escape
+from pathlib import Path
 
 import streamlit as st
 
+from src.auth import authenticate_user, ensure_default_admin_user, register_user
 from src.data.akshare_provider import default_provider
 from src.pipeline import AnalysisBundle
 from src.pipeline import run_analysis
 from src.portfolio import (
+    DEFAULT_PORTFOLIO_PATH,
     add_watchlist_item,
     holding_item_from_search,
+    import_portfolio_file,
     load_portfolio,
     portfolio_item_from_search,
+    portfolio_path_for_user,
     remove_holding_item,
     remove_watchlist_item,
     upsert_holding_item,
@@ -138,6 +143,30 @@ def _clear_portfolio_cache() -> None:
     _run_analysis_cached.clear()
 
 
+def _current_username() -> str | None:
+    username = st.session_state.get("auth_username")
+    return str(username) if username else None
+
+
+def _current_portfolio_path() -> Path:
+    username = _current_username()
+    if not username:
+        raise RuntimeError("请先登录")
+    return portfolio_path_for_user(username)
+
+
+def _maybe_import_legacy_portfolio(username: str) -> None:
+    user_path = portfolio_path_for_user(username)
+    if not DEFAULT_PORTFOLIO_PATH.exists():
+        return
+    import_portfolio_file(DEFAULT_PORTFOLIO_PATH, user_path)
+
+
+def _bootstrap_default_admin() -> None:
+    user = ensure_default_admin_user()
+    _maybe_import_legacy_portfolio(user.username)
+
+
 def _request_analysis_for_code(code: str) -> None:
     st.session_state.stock_query = code
     st.session_state.search_analysis_requested = True
@@ -194,18 +223,27 @@ def _render_saved_item(item, key_prefix: str, holding: bool = False) -> None:
         st.rerun()
     if cols[3].button("删", key=f"{key_prefix}_saved_delete_{item.code}", use_container_width=True):
         if holding:
-            remove_holding_item(item.code)
+            remove_holding_item(item.code, _current_portfolio_path())
         else:
-            remove_watchlist_item(item.code)
+            remove_watchlist_item(item.code, _current_portfolio_path())
         _clear_portfolio_cache()
         st.rerun()
     st.markdown('<div class="aistock-sidebar-row-line"></div>', unsafe_allow_html=True)
 
 
 def _render_portfolio_sidebar() -> None:
-    state = load_portfolio()
+    username = _current_username()
+    if not username:
+        return
+    path = _current_portfolio_path()
+    state = load_portfolio(path)
     with st.sidebar:
-        st.markdown("### 我的股票")
+        user_cols = st.columns([2.4, 1])
+        user_cols[0].markdown(f"### {escape(username)} 的股票")
+        if user_cols[1].button("退出", key="logout_btn", use_container_width=True):
+            st.session_state.pop("auth_username", None)
+            st.session_state.pop("stock_query", None)
+            st.rerun()
 
         watchlist_count = len(state.watchlist) if state.watchlist else 0
         with st.expander(f"我的自选（{watchlist_count}）", expanded=False):
@@ -214,7 +252,7 @@ def _render_portfolio_sidebar() -> None:
                 if result is None:
                     st.error("未匹配到股票，请输入更完整的代码或名称")
                 else:
-                    add_watchlist_item(portfolio_item_from_search(result))
+                    add_watchlist_item(portfolio_item_from_search(result), path)
                     _clear_portfolio_cache()
                     st.success(f"已加入：{_format_result(result)}")
                     st.rerun()
@@ -239,7 +277,7 @@ def _render_portfolio_sidebar() -> None:
                 elif quantity <= 0 or cost_price <= 0:
                     st.error("数量和成本价必须大于 0")
                 else:
-                    upsert_holding_item(holding_item_from_search(result, quantity, cost_price))
+                    upsert_holding_item(holding_item_from_search(result, quantity, cost_price), path)
                     _clear_portfolio_cache()
                     st.success(f"已保存：{_format_result(result)}")
                     st.rerun()
@@ -394,6 +432,56 @@ def _run_and_render_analysis(code: str, display_query: str) -> None:
     _render_analysis_bundle(bundle, display_query)
 
 
+def _complete_login(username: str) -> None:
+    st.session_state.auth_username = username
+    _maybe_import_legacy_portfolio(username)
+    _clear_portfolio_cache()
+
+
+def _render_auth_page() -> None:
+    st.markdown(
+        "<div class='aistock-auth-wrap'>"
+        "<div class='aistock-auth-title'>股票多维分析系统</div>"
+        "<div class='aistock-auth-sub'>登录后，自选股和持仓股会按用户名分别保存在本机。</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    login_tab, register_tab = st.tabs(["登录", "注册"])
+
+    with login_tab:
+        with st.form("login_form", clear_on_submit=False):
+            username = st.text_input("用户名", key="login_username")
+            password = st.text_input("密码", type="password", key="login_password")
+            submitted = st.form_submit_button("登录", use_container_width=True, type="primary")
+        if submitted:
+            try:
+                user = authenticate_user(username, password)
+            except ValueError as e:
+                st.error(str(e))
+            else:
+                _complete_login(user.username)
+                st.rerun()
+
+    with register_tab:
+        with st.form("register_form", clear_on_submit=False):
+            username = st.text_input("用户名", key="register_username", help="3-32 位字母、数字、下划线或短横线")
+            password = st.text_input("密码", type="password", key="register_password")
+            confirm = st.text_input("确认密码", type="password", key="register_confirm")
+            submitted = st.form_submit_button("注册并登录", use_container_width=True, type="primary")
+        if submitted:
+            if password != confirm:
+                st.error("两次输入的密码不一致")
+            else:
+                try:
+                    user = register_user(username, password)
+                except ValueError as e:
+                    st.error(str(e))
+                else:
+                    _complete_login(user.username)
+                    st.success("注册成功")
+                    st.rerun()
+
+
 def _render_leaderboard_group(title: str, rows: list[tuple[str, str, str, str]]) -> None:
     st.markdown(f"#### {title}")
     for code, name, sector, thesis in rows:
@@ -425,6 +513,11 @@ def _render_tech_leaderboard() -> None:
 st.set_page_config(page_title="股票多维分析系统", layout="wide")
 
 inject_dashboard_css()
+_bootstrap_default_admin()
+
+if not _current_username():
+    _render_auth_page()
+    st.stop()
 
 st.markdown(
     "<div style='display:flex; align-items:center; gap:10px;'>"

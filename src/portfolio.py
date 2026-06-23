@@ -8,6 +8,7 @@ from src.types import HoldingItem, Market, PortfolioItem, StockSearchResult
 
 
 DEFAULT_PORTFOLIO_PATH = Path(".aistock") / "portfolio.json"
+DEFAULT_PORTFOLIO_DIR = Path(".aistock") / "portfolios"
 
 
 @dataclass
@@ -18,6 +19,13 @@ class PortfolioState:
 
 def _now_iso() -> str:
     return datetime.now().replace(microsecond=0).isoformat()
+
+
+def portfolio_path_for_user(username: str) -> Path:
+    safe = "".join(ch for ch in username.strip().lower() if ch.isalnum() or ch in {"_", "-"})
+    if not safe:
+        raise ValueError("用户名不能为空")
+    return DEFAULT_PORTFOLIO_DIR / f"{safe}.json"
 
 
 def _market_from_value(value) -> Market:
@@ -94,6 +102,28 @@ def save_portfolio(state: PortfolioState, path: Path | str = DEFAULT_PORTFOLIO_P
         "holdings": [_item_to_dict(item) for item in state.holdings],
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def merge_portfolio_states(base: PortfolioState, incoming: PortfolioState) -> PortfolioState:
+    watchlist = base.watchlist
+    for item in incoming.watchlist:
+        watchlist = _replace_or_append(watchlist, item)
+
+    holdings = base.holdings
+    for item in incoming.holdings:
+        holdings = _replace_or_append(holdings, item)
+
+    return PortfolioState(watchlist=watchlist, holdings=holdings)
+
+
+def import_portfolio_file(source_path: Path | str, target_path: Path | str) -> PortfolioState:
+    source = load_portfolio(source_path)
+    target = load_portfolio(target_path)
+    if not source.watchlist and not source.holdings:
+        return target
+    merged = merge_portfolio_states(target, source)
+    save_portfolio(merged, target_path)
+    return merged
 
 
 def portfolio_item_from_search(result: StockSearchResult) -> PortfolioItem:

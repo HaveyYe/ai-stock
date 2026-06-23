@@ -5,8 +5,10 @@ import unittest
 from src.portfolio import (
     add_watchlist_item,
     holding_item_from_search,
+    import_portfolio_file,
     load_portfolio,
     portfolio_item_from_search,
+    portfolio_path_for_user,
     remove_holding_item,
     remove_watchlist_item,
     save_portfolio,
@@ -115,6 +117,39 @@ class TestPortfolioStore(unittest.TestCase):
         self.assertEqual(watch.code, "AAPL")
         self.assertEqual(holding.quantity, 5)
         self.assertEqual(holding.cost_price, 150)
+
+    def test_portfolio_path_is_scoped_by_username(self):
+        alice = portfolio_path_for_user("Alice")
+        bob = portfolio_path_for_user("bob")
+
+        self.assertNotEqual(alice, bob)
+        self.assertEqual(alice.name, "alice.json")
+        self.assertEqual(bob.name, "bob.json")
+
+    def test_import_portfolio_file_merges_legacy_data(self):
+        source = Path(self.tmp.name) / "legacy.json"
+        target = Path(self.tmp.name) / "admin.json"
+        save_portfolio(
+            PortfolioState(
+                watchlist=[PortfolioItem(code="AAPL", symbol="AAPL", name="Apple", market=Market.US)],
+                holdings=[],
+            ),
+            source,
+        )
+        save_portfolio(
+            PortfolioState(
+                watchlist=[PortfolioItem(code="MSFT", symbol="MSFT", name="Microsoft", market=Market.US)],
+                holdings=[HoldingItem(code="AAPL", symbol="AAPL", name="Apple", market=Market.US, quantity=2, cost_price=100)],
+            ),
+            target,
+        )
+
+        merged = import_portfolio_file(source, target)
+
+        self.assertEqual([item.code for item in merged.watchlist], ["MSFT", "AAPL"])
+        loaded = load_portfolio(target)
+        self.assertEqual(len(loaded.watchlist), 2)
+        self.assertEqual(loaded.holdings[0].code, "AAPL")
 
 
 if __name__ == "__main__":
