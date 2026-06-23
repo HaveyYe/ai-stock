@@ -7,6 +7,8 @@ import akshare as ak
 import pandas as pd
 import requests
 
+from src.analyzers.options_analyzer import analyze as analyze_options
+from src.analyzers.options_analyzer import unavailable as unavailable_options
 from src.config import KLINE_PERIOD_DAYS
 from src.data.provider import DataProvider
 from src.types import (
@@ -14,6 +16,7 @@ from src.types import (
     FundamentalsResult,
     KlineResult,
     Market,
+    OptionAnalysisResult,
     StockSearchResult,
     StockInfo,
 )
@@ -30,9 +33,21 @@ _US_ALIAS_ROWS = [
     ("GOOGL", "谷歌 Alphabet A", ["谷歌", "google", "alphabet"]),
     ("GOOG", "谷歌 Alphabet C", ["谷歌", "google", "alphabet"]),
     ("META", "Meta", ["facebook", "脸书", "meta"]),
+    ("INTC", "英特尔 Intel", ["英特尔", "intel"]),
+    ("AMD", "超威半导体 AMD Advanced Micro Devices", ["超威", "amd", "advanced micro devices"]),
+    ("ORCL", "甲骨文 Oracle", ["甲骨文", "oracle"]),
+    ("IBM", "IBM International Business Machines", ["ibm", "international business machines"]),
+    ("PLTR", "Palantir", ["palantir"]),
+    ("COIN", "Coinbase", ["coinbase"]),
+    ("AVGO", "博通 Broadcom", ["博通", "broadcom"]),
+    ("QCOM", "高通 Qualcomm", ["高通", "qualcomm"]),
+    ("UBER", "Uber", ["uber"]),
+    ("CRM", "Salesforce", ["salesforce"]),
     ("NFLX", "奈飞 Netflix", ["奈飞", "netflix"]),
     ("BABA", "阿里巴巴 Alibaba", ["阿里巴巴", "alibaba"]),
     ("NOK", "诺基亚 Nokia", ["诺基亚", "nokia"]),
+    ("SPCX", "SpaceX Space Exploration Technologies", ["spacex", "space x", "space exploration technologies"]),
+    ("SPCH", "2倍做多 SPCX ETF Leverage Shares 2X Long SPCX Daily ETF", ["2x spcx", "leverage shares spcx"]),
     ("BRK.A", "伯克希尔 Berkshire Hathaway A", ["伯克希尔", "berkshire"]),
     ("BRK.B", "伯克希尔 Berkshire Hathaway B", ["伯克希尔", "berkshire"]),
 ]
@@ -131,6 +146,7 @@ class AkShareProvider(DataProvider):
         self._resolved_name_cache: dict[str, str] = {}
         self._search_cache: Optional[list[StockSearchResult]] = None
         self._market_search_cache: dict[Market, list[StockSearchResult]] = {}
+        self._remote_search_cache: dict[str, list[StockSearchResult]] = {}
         self._session = requests.Session()
         if disable_proxy:
             self._session.trust_env = False
@@ -150,7 +166,12 @@ class AkShareProvider(DataProvider):
                 self._resolved_name_cache[cache_key] = item.name
                 return item.name
 
-        for item in self._catalog():
+        if market is Market.US:
+            fallback = f"{_MARKET_CN_FOR_NAME.get(market, market.value)} {symbol}"
+            self._resolved_name_cache[cache_key] = fallback
+            return fallback
+
+        for item in self._market_catalog(market):
             if item.market is market and item.symbol == symbol:
                 self._resolved_name_cache[cache_key] = item.name
                 return item.name
@@ -172,9 +193,6 @@ class AkShareProvider(DataProvider):
         return _alias_results(Market.HK, _HK_ALIAS_ROWS) + _alias_results(Market.US, _US_ALIAS_ROWS)
 
     def _resolve_direct_search_result(self, direct: StockSearchResult) -> StockSearchResult:
-        if direct.market is Market.US:
-            return direct
-
         for item in self._static_alias_catalog():
             if item.market is direct.market and item.symbol == direct.symbol:
                 return StockSearchResult(
@@ -184,6 +202,9 @@ class AkShareProvider(DataProvider):
                     market=direct.market,
                     score=direct.score,
                 )
+
+        if direct.market is Market.US:
+            return direct
 
         for item in self._market_catalog(direct.market):
             if item.market is direct.market and item.symbol == direct.symbol:
@@ -250,14 +271,18 @@ class AkShareProvider(DataProvider):
         if alias is not None:
             return [alias]
 
-        direct = _direct_code_result(q)
-        if direct is not None:
-            return [self._resolve_direct_search_result(direct)]
-
         q_norm = _normalize_query(q)
         static_scored = _score_catalog(q_norm, self._static_alias_catalog())
         if static_scored and static_scored[0].score >= 80:
             return static_scored[:limit]
+
+        remote_results = self._remote_us_search(q, limit=limit) if _looks_like_english_name_query(q) else []
+        if remote_results:
+            return remote_results[:limit]
+
+        direct = _direct_code_result(q)
+        if direct is not None:
+            return [self._resolve_direct_search_result(direct)]
 
         scored = []
         for item in self._catalog():
@@ -274,6 +299,17 @@ class AkShareProvider(DataProvider):
                 )
 
         return _dedupe_results(sorted(scored, key=lambda x: x.score, reverse=True))[:limit]
+
+    def _remote_us_search(self, query: str, limit: int = 10) -> list[StockSearchResult]:
+        cache_key = _normalize_query(query)
+        if cache_key in self._remote_search_cache:
+            return self._remote_search_cache[cache_key]
+        try:
+            results = _fetch_yahoo_search(self._session, query, limit=limit)
+        except Exception:
+            results = []
+        self._remote_search_cache[cache_key] = results
+        return results
 
     def _fetch_snapshot(self, market: Market, symbol: str) -> _TxSnapshot:
         cache_key = f"{market.value}:{symbol}"
@@ -334,27 +370,27 @@ class AkShareProvider(DataProvider):
         return None
 
     def _fetch_us_klines(self, symbol: str) -> pd.DataFrame:
-        errors: list[Exception] = []
-        for kwargs in ({"adjust": "qfq"}, {}):
-            try:
-                df = ak.stock_us_daily(symbol=symbol, **kwargs)
-                if df is not None and not df.empty:
-                    return df
-            except Exception as e:
-                errors.append(e)
-
         try:
             return _fetch_yahoo_chart(self._session, symbol)
         except ValueError:
             raise
-        except Exception as e:
+        except Exception as yahoo_error:
+            errors: list[Exception] = []
+            for kwargs in ({"adjust": "qfq"}, {}):
+                try:
+                    df = ak.stock_us_daily(symbol=symbol, **kwargs)
+                    if df is not None and not df.empty:
+                        return df
+                except Exception as e:
+                    errors.append(e)
+
             if errors:
                 first = errors[0]
                 raise RuntimeError(
-                    f"AKShare 美股源失败: {type(first).__name__}: {first}; "
-                    f"Yahoo 备用源失败: {type(e).__name__}: {e}"
-                ) from e
-            raise
+                    f"Yahoo 美股源失败: {type(yahoo_error).__name__}: {yahoo_error}; "
+                    f"AKShare 备用源失败: {type(first).__name__}: {first}"
+                ) from first
+            raise yahoo_error
 
     def _fetch_a_share_klines(self, symbol: str) -> pd.DataFrame:
         errors: list[Exception] = []
@@ -445,6 +481,21 @@ class AkShareProvider(DataProvider):
         )
         return FundamentalsResult(info=info, fundamentals=fundamentals)
 
+    def get_options_analysis(self, code: str, current_price: Optional[float] = None) -> OptionAnalysisResult:
+        market = detect_market(code)
+        symbol = normalize_symbol(code, market)
+        if market is not Market.US:
+            return unavailable_options("期权分析第一版仅覆盖美股个股，A 股和港股暂不参与期权评分")
+
+        try:
+            if current_price is None:
+                snapshot = self.get_latest_snapshot(code)
+                current_price = snapshot.last_price
+            calls, puts, expiry = _fetch_yahoo_options(self._session, symbol)
+            return analyze_options(calls, puts, current_price=current_price, expiry=expiry)
+        except Exception as e:
+            return unavailable_options(f"美股期权链获取失败: {type(e).__name__}: {e}")
+
 
 def _looks_like_number(s: str) -> bool:
     if not s:
@@ -498,11 +549,16 @@ def _network_hint(market: Market) -> str:
     )
 
 
+def _yahoo_symbol(symbol: str) -> str:
+    return symbol.replace(".", "-")
+
+
 def _fetch_yahoo_chart(session: requests.Session, symbol: str) -> pd.DataFrame:
+    yahoo_symbol = _yahoo_symbol(symbol)
     end = int(time.time())
     start = end - KLINE_PERIOD_DAYS * 2 * 86400
     response = session.get(
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}",
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo_symbol}",
         params={
             "period1": start,
             "period2": end,
@@ -513,6 +569,8 @@ def _fetch_yahoo_chart(session: requests.Session, symbol: str) -> pd.DataFrame:
         headers={"User-Agent": "Mozilla/5.0"},
         timeout=10,
     )
+    if response.status_code == 404:
+        raise ValueError(f"Yahoo Finance 未收录代码 {symbol}（404 Not Found）")
     response.raise_for_status()
     payload = response.json()
     chart = payload.get("chart", {})
@@ -550,6 +608,94 @@ def _fetch_yahoo_chart(session: requests.Session, symbol: str) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _fetch_yahoo_options(session: requests.Session, symbol: str) -> tuple[pd.DataFrame, pd.DataFrame, Optional[str]]:
+    yahoo_symbol = _yahoo_symbol(symbol)
+    payload = _get_yahoo_options_payload(session, yahoo_symbol)
+    result = _first_yahoo_option_result(payload)
+    options = result.get("options") or []
+    expirations = result.get("expirationDates") or []
+
+    if not options and expirations:
+        payload = _get_yahoo_options_payload(session, yahoo_symbol, expirations[0])
+        result = _first_yahoo_option_result(payload)
+        options = result.get("options") or []
+
+    if not options:
+        raise ValueError("Yahoo options returned no option chain")
+
+    chain = options[0]
+    expiry_ts = chain.get("expirationDate")
+    expiry = datetime.fromtimestamp(expiry_ts).strftime("%Y-%m-%d") if expiry_ts else None
+    calls = pd.DataFrame(chain.get("calls") or [])
+    puts = pd.DataFrame(chain.get("puts") or [])
+    return calls, puts, expiry
+
+
+def _get_yahoo_options_payload(session: requests.Session, yahoo_symbol: str, expiry: Optional[int] = None) -> dict:
+    params = {"date": expiry} if expiry is not None else None
+    response = session.get(
+        f"https://query2.finance.yahoo.com/v7/finance/options/{yahoo_symbol}",
+        params=params,
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=10,
+    )
+    if response.status_code == 401:
+        crumb = _get_yahoo_crumb(session)
+        params = dict(params or {})
+        params["crumb"] = crumb
+        response = session.get(
+            f"https://query1.finance.yahoo.com/v7/finance/options/{yahoo_symbol}",
+            params=params,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=10,
+        )
+    if response.status_code == 404:
+        raise ValueError(f"Yahoo Finance 未收录 {yahoo_symbol} 的期权链")
+    response.raise_for_status()
+    return response.json()
+
+
+def _get_yahoo_crumb(session: requests.Session) -> str:
+    cached = getattr(session, "_aistock_yahoo_crumb", None)
+    if cached:
+        return cached
+    headers = {"User-Agent": "Mozilla/5.0"}
+    last_error: Optional[Exception] = None
+    for attempt in range(3):
+        try:
+            try:
+                session.get("https://fc.yahoo.com", headers=headers, timeout=6)
+            except requests.RequestException:
+                pass
+            response = session.get(
+                "https://query1.finance.yahoo.com/v1/test/getcrumb",
+                headers=headers,
+                timeout=8,
+            )
+            response.raise_for_status()
+            crumb = response.text.strip()
+            if crumb and not crumb.startswith("{"):
+                setattr(session, "_aistock_yahoo_crumb", crumb)
+                return crumb
+            last_error = ValueError("Yahoo crumb is empty or invalid")
+        except requests.RequestException as e:
+            last_error = e
+            time.sleep(0.5)
+    raise ValueError(f"Yahoo crumb 获取失败: {last_error}")
+
+
+def _first_yahoo_option_result(payload: dict) -> dict:
+    chain = payload.get("optionChain", {})
+    error = chain.get("error")
+    if error:
+        description = error.get("description") if isinstance(error, dict) else str(error)
+        raise ValueError(description or "Yahoo option chain error")
+    results = chain.get("result") or []
+    if not results:
+        raise ValueError("Yahoo options returned no result")
+    return results[0]
+
+
 def _nth(values, index: int):
     if not values or index >= len(values):
         return None
@@ -583,6 +729,65 @@ def _direct_code_result(query: str) -> Optional[StockSearchResult]:
         market=market,
         score=120.0,
     )
+
+
+def _looks_like_english_name_query(query: str) -> bool:
+    stripped = query.strip()
+    compact = stripped.replace(" ", "")
+    if len(compact) < 5:
+        return False
+    if not any(ch.isalpha() for ch in compact):
+        return False
+    return all(ch.isalpha() or ch.isspace() or ch in {"&", ".", "-", "'"} for ch in stripped)
+
+
+def _fetch_yahoo_search(
+    session: requests.Session,
+    query: str,
+    limit: int = 10,
+) -> list[StockSearchResult]:
+    response = session.get(
+        "https://query2.finance.yahoo.com/v1/finance/search",
+        params={"q": query, "quotesCount": limit, "newsCount": 0},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=4,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    rows: list[StockSearchResult] = []
+    for item in payload.get("quotes", []) or []:
+        quote_type = str(item.get("quoteType") or "").upper()
+        if quote_type not in {"EQUITY", "ETF"}:
+            continue
+        raw_symbol = str(item.get("symbol") or "").strip().upper()
+        if not raw_symbol or any(token in raw_symbol for token in ("=", "^")):
+            continue
+        if raw_symbol.endswith((".HK", ".SS", ".SZ")):
+            continue
+        symbol = raw_symbol.replace("-", ".")
+        try:
+            market = detect_market(symbol)
+            normalized_symbol = normalize_symbol(symbol, market)
+        except ValueError:
+            continue
+        if market is not Market.US:
+            continue
+        name = (
+            item.get("shortname")
+            or item.get("longname")
+            or item.get("name")
+            or normalized_symbol
+        )
+        rows.append(
+            StockSearchResult(
+                code=_display_code(normalized_symbol, market),
+                symbol=normalized_symbol,
+                name=str(name).strip() or normalized_symbol,
+                market=market,
+                score=118.0,
+            )
+        )
+    return _dedupe_results(rows)
 
 
 def _exact_static_alias_result(query: str) -> Optional[StockSearchResult]:
