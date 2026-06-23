@@ -6,7 +6,7 @@ import pandas as pd
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
 from src.analyzers.price_action_analyzer import PriceActionResult
-from src.types import DataQuality, KlineResult, Market, StockInfo
+from src.types import DataQuality, KlineResult, Market, OptionAnalysisResult, StockInfo
 from src.ui.blocks import build_technical_snapshot_html
 
 
@@ -64,6 +64,13 @@ class TestBlocks(unittest.TestCase):
                 breakout_state="区间内",
             ),
             DataQuality(completeness=0.8, kline_days=25, latest_trade_date="2026-01-25"),
+            OptionAnalysisResult(
+                available=True,
+                score=62,
+                label="期权情绪偏积极",
+                support_strike=115,
+                resistance_strike=130,
+            ),
         )
 
         self.assertIn("技术快照", html)
@@ -72,7 +79,10 @@ class TestBlocks(unittest.TestCase):
         self.assertIn("+1.00", html)
         self.assertIn("+0.81%", html)
         self.assertIn("成交量", html)
-        self.assertIn("支撑 / 压力", html)
+        self.assertIn("综合支撑 / 压力", html)
+        self.assertIn("正股技术位+Put密集区共振", html)
+        self.assertIn("Put / Call 密集区", html)
+        self.assertIn("115.00 / 130.00", html)
         self.assertIn("偏强震荡", html)
         self.assertIn("2026-01-25", html)
 

@@ -1,6 +1,6 @@
 import unittest
 
-from src.types import DataQuality, Fundamentals, StockInfo, Market
+from src.types import DataQuality, Fundamentals, OptionAnalysisResult, StockInfo, Market
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
@@ -216,6 +216,37 @@ class TestReport(unittest.TestCase):
         self.assertIn("上升结构", self.report)
         self.assertIn("支撑 / 压力", self.report)
         self.assertIn("追高性价比下降", self.report)
+
+    def test_contains_options_section_when_provided(self):
+        composite = _make_composite_result()
+        composite.breakdown["options"] = 64
+        composite.weights["options"] = 0.1
+        report = build_report(
+            _make_info(),
+            _make_fundamentals(),
+            _make_value_result(),
+            _make_bollinger_result(),
+            _make_fibonacci_result(),
+            _make_price_action_result(),
+            composite,
+            option_result=OptionAnalysisResult(
+                available=True,
+                score=64,
+                label="期权情绪偏积极",
+                expiry="2026-07-17",
+                put_call_volume_ratio=0.6,
+                put_call_open_interest_ratio=0.8,
+                median_iv=32,
+                support_strike=95,
+                resistance_strike=110,
+                signals=["期权成交偏乐观"],
+                confidence=0.7,
+            ),
+        )
+
+        self.assertIn("## 六、期权情绪", report)
+        self.assertIn("期权支撑 / 压力", report)
+        self.assertIn("## 七、风险提示", report)
 
 
 if __name__ == "__main__":

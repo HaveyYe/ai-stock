@@ -5,10 +5,18 @@ import streamlit as st
 
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
+from src.analyzers.levels import combine_support_resistance
 from src.analyzers.price_action_analyzer import PriceActionResult
 from src.analyzers.value_analyzer import ValueResult
 from src.scoring.composer import CompositeResult
-from src.types import DataQuality, Fundamentals, KlineResult, StockInfo
+from src.types import (
+    DataQuality,
+    Fundamentals,
+    KlineResult,
+    OptionAnalysisResult,
+    StockInfo,
+    SupportResistanceResult,
+)
 
 _CSS = """
 <style>
@@ -240,6 +248,122 @@ _CSS = """
 [data-testid="stExpander"] li { font-size: 13px; color: #475569; line-height: 1.9; }
 [data-testid="stExpander"] strong { color: #0f172a; font-weight: 700; }
 [data-testid="stExpander"] hr { border: none; border-top: 1px solid #e2e8f0; margin: 12px 0; }
+
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    margin-bottom: 18px;
+}
+[data-testid="stSidebar"] {
+    background: #111827;
+}
+[data-testid="stSidebar"] h3,
+[data-testid="stSidebar"] h4 {
+    color: #f8fafc !important;
+    font-weight: 850 !important;
+}
+[data-testid="stSidebar"] p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] span {
+    color: #d1d5db;
+}
+[data-testid="stSidebar"] .stButton > button {
+    min-height: 30px;
+    height: 30px;
+    padding: 2px 6px;
+    border-radius: 7px;
+    font-size: 13px;
+    font-weight: 800;
+    border: 1px solid #475569;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: #2563eb;
+    border-color: #3b82f6;
+    color: #ffffff;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    border-color: #60a5fa;
+    box-shadow: 0 0 0 2px rgba(96,165,250,0.18);
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {
+    padding: 16px 18px;
+    border-radius: 10px;
+    background: #1f2937;
+    font-size: 17px;
+    font-weight: 800;
+    list-style: none;
+    border: 1px solid #374151;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {
+    background: #263244;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p {
+    font-size: 17px;
+    font-weight: 800;
+    color: #f8fafc;
+    margin: 0;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary span[data-testid="stIconMaterial"] {
+    font-size: 24px;
+    color: #cbd5e1;
+}
+.aistock-sidebar-th {
+    color: #94a3b8 !important;
+    font-size: 11px;
+    font-weight: 800;
+    padding: 0 0 4px 0;
+    border-bottom: 1px solid #374151;
+}
+.aistock-sidebar-stock-cell {
+    min-height: 31px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 1px;
+    overflow: hidden;
+}
+.aistock-sidebar-code-inline {
+    color: #f8fafc !important;
+    font-size: 14px;
+    font-weight: 900;
+    line-height: 1.1;
+    letter-spacing: 0;
+}
+.aistock-sidebar-name-inline {
+    color: #cbd5e1 !important;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1.15;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: block;
+    max-width: 100%;
+}
+.aistock-sidebar-mid-cell {
+    min-height: 31px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+.aistock-sidebar-market-cell,
+.aistock-sidebar-pos {
+    color: #e5e7eb !important;
+    font-size: 12px;
+    font-weight: 800;
+    line-height: 1.15;
+    white-space: nowrap;
+}
+.aistock-sidebar-sub {
+    color: #94a3b8 !important;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.15;
+    white-space: nowrap;
+}
+.aistock-sidebar-row-line {
+    height: 1px;
+    background: #263244;
+    margin: 2px 0 3px 0;
+}
 </style>
 """
 
@@ -376,6 +500,8 @@ def build_technical_snapshot_html(
     fibonacci_result: FibonacciResult,
     price_action_result: PriceActionResult,
     data_quality: Optional[DataQuality] = None,
+    option_result: Optional[OptionAnalysisResult] = None,
+    level_result: Optional[SupportResistanceResult] = None,
 ) -> str:
     klines = kline_result.klines
     date_text = _last_trade_date(klines, data_quality)
@@ -415,8 +541,16 @@ def build_technical_snapshot_html(
     volume = latest.get("volume") if "volume" in klines.columns else None
     pct_b = getattr(bollinger_result, "percent_b", None)
     fib_pos = getattr(fibonacci_result, "position_ratio", None)
-    support = getattr(price_action_result, "support", None)
-    resistance = getattr(price_action_result, "resistance", None)
+    if level_result is None:
+        level_result = combine_support_resistance(price_action_result, option_result, current_price=current)
+    support = getattr(level_result, "support", None)
+    resistance = getattr(level_result, "resistance", None)
+    support_source = getattr(level_result, "support_source", "数据不可用")
+    resistance_source = getattr(level_result, "resistance_source", "数据不可用")
+    option_support = getattr(option_result, "support_strike", None) if option_result is not None else None
+    option_resistance = getattr(option_result, "resistance_strike", None) if option_result is not None else None
+    option_available = bool(getattr(option_result, "available", False)) if option_result is not None else False
+    option_label = "Put / Call 密集区" if option_available else "期权支撑 / 压力"
 
     return (
         '<div class="aistock-tech-snapshot">'
@@ -439,8 +573,13 @@ def build_technical_snapshot_html(
         f'<div class="aistock-tech-value">{_plain_number(low_20)} - {_plain_number(high_20)}</div>'
         '</div>'
         '<div class="aistock-tech-item">'
-        '<div class="aistock-tech-label">支撑 / 压力</div>'
+        '<div class="aistock-tech-label">综合支撑 / 压力</div>'
         f'<div class="aistock-tech-value">{_plain_number(support)} / {_plain_number(resistance)}</div>'
+        f'<div class="aistock-tech-sub">支撑：{support_source} · 压力：{resistance_source}</div>'
+        '</div>'
+        '<div class="aistock-tech-item">'
+        f'<div class="aistock-tech-label">{option_label}</div>'
+        f'<div class="aistock-tech-value">{_plain_number(option_support)} / {_plain_number(option_resistance)}</div>'
         '</div>'
         '<div class="aistock-tech-item">'
         '<div class="aistock-tech-label">布林位置</div>'
@@ -465,6 +604,8 @@ def render_technical_snapshot(
     fibonacci_result: FibonacciResult,
     price_action_result: PriceActionResult,
     data_quality: Optional[DataQuality] = None,
+    option_result: Optional[OptionAnalysisResult] = None,
+    level_result: Optional[SupportResistanceResult] = None,
 ) -> None:
     st.markdown(
         build_technical_snapshot_html(
@@ -473,6 +614,8 @@ def render_technical_snapshot(
             fibonacci_result,
             price_action_result,
             data_quality,
+            option_result,
+            level_result,
         ),
         unsafe_allow_html=True,
     )
@@ -568,6 +711,7 @@ def render_score_hero(
                         <span>布林带 <b>{int(round(breakdown.get('bollinger', 0)))}</b> · 权重 {int(weights.get('bollinger',0)*100)}%</span>
                         <span>斐波那契 <b>{int(round(breakdown.get('fibonacci', 0)))}</b> · 权重 {int(weights.get('fibonacci',0)*100)}%</span>
                         <span>Price Action <b>{int(round(breakdown.get('price_action', 0)))}</b> · 权重 {int(weights.get('price_action',0)*100)}%</span>
+                        <span>期权 <b>{int(round(breakdown.get('options', 0)))}</b> · 权重 {int(weights.get('options',0)*100)}%</span>
                     </div>
                     <div style="margin-top:12px; display:flex; flex-wrap:wrap; gap:12px; font-size:12px; color:#475569;">
                         {quality_html}
@@ -809,12 +953,56 @@ def _price_action_card_html(result: PriceActionResult) -> str:
     )
 
 
+def _options_card_html(result: Optional[OptionAnalysisResult]) -> str:
+    if result is None:
+        result = OptionAnalysisResult(available=False, warnings=["期权分析未提供"])
+    score = int(round(float(result.score)))
+    color = _score_color(score) if result.available else "#94a3b8"
+    accent = "#6366f1"
+
+    stats = _stat_grid([
+        _stat_cell("Put/Call 成交", _fmt(result.put_call_volume_ratio, "", digits=2)),
+        _stat_cell("Put/Call 持仓", _fmt(result.put_call_open_interest_ratio, "", digits=2)),
+        _stat_cell("IV 中位数", _fmt(result.median_iv, "%", digits=1)),
+        _stat_cell("到期日", result.expiry or "数据不可用"),
+        _stat_cell("期权支撑", _fmt(result.support_strike)),
+        _stat_cell("期权压力", _fmt(result.resistance_strike)),
+    ], cols=2)
+
+    warning_html = _signal_list(result.warnings, "#94a3b8") if result.warnings else ""
+    signal_html = _signal_list(result.signals, accent) if result.signals else _signal_list(["期权维度暂不参与评分"], "#cbd5e1")
+    score_text = str(score) if result.available else "NA"
+    confidence = float(getattr(result, "confidence", 0.0)) * 100
+
+    body = (
+        f'<div class="aistock-card-body">'
+        + stats
+        + f'<div style="font-size:11px; color:#64748b; margin-top:6px;">置信度 {confidence:.0f}%</div>'
+        + f'<div style="font-size:12px; color:#475569; margin-top:8px; line-height:1.45;">{getattr(result, "interpretation", "")}</div>'
+        + f'<div style="margin-top:12px;"><div class="aistock-section-label aistock-section-label-bold">信号</div>{signal_html}</div>'
+        + (f'<div style="margin-top:auto; padding-top:12px;"><div class="aistock-section-label aistock-section-label-bold">提示</div>{warning_html}</div>' if warning_html else "")
+        + "</div>"
+    )
+
+    return (
+        f'<div class="aistock-card" style="--accent:{accent};">'
+        f'<div class="aistock-card-head">'
+        f'<div><div class="aistock-card-title">期权情绪</div>'
+        f'<div class="aistock-card-sub">{result.label}</div></div>'
+        f'<div class="aistock-score-chip" style="background:{color};">{score_text}</div>'
+        f'</div>'
+        f'{body}'
+        f'</div>'
+    )
+
+
 def render_analysis_grid(
     value_result: ValueResult,
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
     price_action_result: PriceActionResult,
     fundamentals: Fundamentals,
+    option_result: Optional[OptionAnalysisResult] = None,
 ) -> None:
     html = (
         '<div class="aistock-cards-row">'
@@ -822,6 +1010,7 @@ def render_analysis_grid(
         + _bollinger_card_html(bollinger_result)
         + _fibonacci_card_html(fibonacci_result)
         + _price_action_card_html(price_action_result)
+        + _options_card_html(option_result)
         + '</div>'
     )
     st.markdown(html, unsafe_allow_html=True)

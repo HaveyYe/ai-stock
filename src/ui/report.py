@@ -1,7 +1,14 @@
 from typing import Optional
 
 from src import config
-from src.types import DataQuality, Fundamentals, StockInfo
+from src.analyzers.levels import combine_support_resistance
+from src.types import (
+    DataQuality,
+    Fundamentals,
+    OptionAnalysisResult,
+    StockInfo,
+    SupportResistanceResult,
+)
 from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
@@ -71,6 +78,8 @@ def build_report(
     price_action_result: PriceActionResult,
     composite_result: CompositeResult,
     data_quality: Optional[DataQuality] = None,
+    option_result: Optional[OptionAnalysisResult] = None,
+    level_result: Optional[SupportResistanceResult] = None,
 ) -> str:
     name = getattr(info, "name", "")
     code = getattr(info, "code", "")
@@ -90,10 +99,12 @@ def build_report(
     b_score = breakdown.get("bollinger", 0)
     f_score = breakdown.get("fibonacci", 0)
     p_score = breakdown.get("price_action", 0)
+    o_score = breakdown.get("options", 0)
     w_value = float(weights.get("value", 0.0))
     w_bollinger = float(weights.get("bollinger", 0.0))
     w_fibonacci = float(weights.get("fibonacci", 0.0))
     w_price_action = float(weights.get("price_action", 0.0))
+    w_options = float(weights.get("options", 0.0))
 
     pe = getattr(fundamentals, "pe_ttm", None)
     pb = getattr(fundamentals, "pb", None)
@@ -127,6 +138,8 @@ def build_report(
     pa_range_position = getattr(price_action_result, "range_position", None)
     pa_body_ratio = getattr(price_action_result, "body_ratio", None)
     pa_volume_ratio = getattr(price_action_result, "volume_ratio", None)
+    if level_result is None:
+        level_result = combine_support_resistance(price_action_result, option_result, current_price=pa_current)
 
     lines = []
 
@@ -157,9 +170,16 @@ def build_report(
     lines.append(
         f"- Price Action：{p_score} 分（权重 {w_price_action * 100:.0f}%）"
     )
+    lines.append(
+        f"- 期权情绪：{o_score} 分（权重 {w_options * 100:.0f}%）"
+    )
     lines.append(f"- **加权综合分：{score} → {action}**")
     lines.append(f"- 综合置信度：{float(confidence) * 100:.0f}%")
     lines.append(f"- 风险等级：{risk_level}")
+    lines.append(
+        f"- 综合支撑 / 压力：{_fmt_num(level_result.support)} / {_fmt_num(level_result.resistance)}"
+        f"（支撑：{level_result.support_source}；压力：{level_result.resistance_source}）"
+    )
     if conflicts:
         lines.append("- 冲突信号：")
         lines.extend(f"  - {item}" for item in conflicts)
@@ -237,7 +257,11 @@ def build_report(
     lines.append(f"## 五、Price Action（{price_action_label}）")
     lines.append(f"- 当前价：{_fmt_num(pa_current)}")
     lines.append(f"- 价格结构：{pa_trend or '数据不可用'}")
-    lines.append(f"- 支撑 / 压力：{_fmt_num(pa_support)} / {_fmt_num(pa_resistance)}")
+    lines.append(f"- 正股技术支撑 / 压力：{_fmt_num(pa_support)} / {_fmt_num(pa_resistance)}")
+    lines.append(
+        f"- 综合支撑 / 压力：{_fmt_num(level_result.support)} / {_fmt_num(level_result.resistance)}"
+        f"（支撑：{level_result.support_source}；压力：{level_result.resistance_source}）"
+    )
     if pa_range_position is None:
         pa_pos_text = "数据不可用"
     else:
@@ -255,7 +279,25 @@ def build_report(
     lines.append(_fmt_signals(getattr(price_action_result, "risks", [])))
     lines.append("")
 
-    lines.append("## 六、风险提示")
+    if option_result is not None:
+        lines.append(f"## 六、期权情绪（{option_result.label}）")
+        lines.append(f"- 到期日：{option_result.expiry or '数据不可用'}")
+        lines.append(f"- Put/Call 成交量比：{_fmt_num(option_result.put_call_volume_ratio)}")
+        lines.append(f"- Put/Call 持仓比：{_fmt_num(option_result.put_call_open_interest_ratio)}")
+        lines.append(f"- 隐含波动率中位数：{_fmt_num(option_result.median_iv, '%')}")
+        lines.append(f"- 期权支撑 / 压力：{_fmt_num(option_result.support_strike)} / {_fmt_num(option_result.resistance_strike)}")
+        lines.append(f"- 置信度：{float(getattr(option_result, 'confidence', 0.0)) * 100:.0f}%")
+        if getattr(option_result, "interpretation", ""):
+            lines.append(f"- 解读：{option_result.interpretation}")
+        lines.append("- 信号解读：")
+        lines.append(_fmt_signals(getattr(option_result, "signals", [])))
+        if getattr(option_result, "warnings", []):
+            lines.append("- 数据提示：")
+            lines.append(_fmt_signals(option_result.warnings))
+        lines.append("")
+
+    risk_section = "## 七、风险提示" if option_result is not None else "## 六、风险提示"
+    lines.append(risk_section)
     lines.append("- 本报告由程序根据公开数据自动生成，仅供参考，不构成投资建议。")
     lines.append("- 技术指标存在滞后性，请结合宏观环境与公司基本面综合判断。")
     lines.append(f"- {_action_tip(action)}")
