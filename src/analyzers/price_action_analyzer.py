@@ -57,6 +57,54 @@ def _last_swing_low(lows: pd.Series, lookback: int = 3) -> Optional[float]:
     return None
 
 
+def _swing_highs(highs: pd.Series, lookback: int = 3) -> List[float]:
+    if len(highs) < lookback * 2 + 1:
+        return []
+    values = highs.reset_index(drop=True)
+    points: List[float] = []
+    for idx in range(lookback, len(values) - lookback):
+        center = values.iloc[idx]
+        window = values.iloc[idx - lookback:idx + lookback + 1]
+        if center == window.max():
+            points.append(_safe_float(center))
+    return points
+
+
+def _swing_lows(lows: pd.Series, lookback: int = 3) -> List[float]:
+    if len(lows) < lookback * 2 + 1:
+        return []
+    values = lows.reset_index(drop=True)
+    points: List[float] = []
+    for idx in range(lookback, len(values) - lookback):
+        center = values.iloc[idx]
+        window = values.iloc[idx - lookback:idx + lookback + 1]
+        if center == window.min():
+            points.append(_safe_float(center))
+    return points
+
+
+def _nearest_support(lows: pd.Series, current: float, min_distance: float = 0.0) -> Optional[float]:
+    candidates = [value for value in _swing_lows(lows) if value <= current]
+    candidates.extend([value for value in lows.iloc[:-1].tail(20).astype(float).tolist() if value <= current])
+    distant = [value for value in candidates if current - value >= min_distance]
+    if distant:
+        candidates = distant
+    if not candidates:
+        return None
+    return max(candidates)
+
+
+def _nearest_resistance(highs: pd.Series, current: float, min_distance: float = 0.0) -> Optional[float]:
+    candidates = [value for value in _swing_highs(highs) if value >= current]
+    candidates.extend([value for value in highs.iloc[:-1].tail(20).astype(float).tolist() if value >= current])
+    distant = [value for value in candidates if value - current >= min_distance]
+    if distant:
+        candidates = distant
+    if not candidates:
+        return None
+    return min(candidates)
+
+
 def _trend_from_structure(close: pd.Series) -> tuple[str, float]:
     if len(close) < 20:
         return "样本不足", 50.0
@@ -97,8 +145,17 @@ def analyze(klines, window: int = 60) -> PriceActionResult:
     volume = df["volume"].astype(float) if "volume" in df.columns else None
 
     current = _safe_float(close.iloc[-1])
-    support = _last_swing_low(low) or _safe_float(low.tail(20).min())
-    resistance = _last_swing_high(high) or _safe_float(high.tail(20).max())
+    day_ranges = (high - low).dropna()
+    avg_range = _safe_float(day_ranges.tail(14).mean(), 0.0)
+    level_min_distance = max(abs(current) * 0.01, avg_range * 0.5, 0.01)
+    old_support = _last_swing_low(low)
+    old_resistance = _last_swing_high(high)
+    support = _nearest_support(low, current, level_min_distance)
+    resistance = _nearest_resistance(high, current, level_min_distance)
+    if support is None:
+        support = _safe_float(low.tail(20).min())
+    if resistance is None:
+        resistance = _safe_float(high.tail(20).max())
     recent_high = _safe_float(high.iloc[:-1].tail(20).max())
     recent_low = _safe_float(low.iloc[:-1].tail(20).min())
 
@@ -112,6 +169,10 @@ def analyze(klines, window: int = 60) -> PriceActionResult:
     risks: List[str] = []
 
     breakout_state = "区间内"
+    if old_support is not None and current < old_support:
+        risks.append(f"当前价已跌破前支撑 {old_support:.2f}，该位置转为上方压力参考")
+    if old_resistance is not None and current > old_resistance:
+        signals.append(f"当前价已突破前压力 {old_resistance:.2f}，需观察回踩确认")
     if current > recent_high * 1.005:
         breakout_state = "向上突破"
         score += 12

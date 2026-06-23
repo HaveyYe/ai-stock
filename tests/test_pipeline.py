@@ -4,12 +4,14 @@ from datetime import datetime, timedelta
 import pandas as pd
 
 from src.data.provider import DataProvider
-from src.pipeline import AnalysisBundle, run_analysis
+from src.pipeline import AnalysisBundle, analyze_watchlist_items, run_analysis
 from src.types import (
     Fundamentals,
     FundamentalsResult,
+    HoldingItem,
     KlineResult,
     Market,
+    PortfolioItem,
     StockSearchResult,
     StockInfo,
 )
@@ -108,7 +110,7 @@ class TestRunAnalysis(unittest.TestCase):
     def test_breakdown_keys_present(self):
         breakdown = self.bundle.composite_result.breakdown
         self.assertEqual(
-            set(breakdown.keys()), {"value", "bollinger", "fibonacci", "price_action"}
+            set(breakdown.keys()), {"value", "bollinger", "fibonacci", "price_action", "options"}
         )
 
     def test_data_quality_present(self):
@@ -131,6 +133,50 @@ class TestRunAnalysis(unittest.TestCase):
         run_analysis("APPLE", provider=provider)
 
         self.assertEqual(provider.requested_codes[0], "AAPL")
+
+    def test_long_english_name_without_match_is_not_treated_as_ticker(self):
+        provider = FakeProvider("ORACLE")
+
+        with self.assertRaisesRegex(ValueError, "未找到匹配股票"):
+            run_analysis("ORACLE", provider=provider)
+
+        self.assertEqual(provider.requested_codes, [])
+
+    def test_watchlist_summary_resolves_fuzzy_query_before_analysis(self):
+        provider = FakeProvider("AAPL")
+        rows = analyze_watchlist_items(
+            [
+                PortfolioItem(
+                    code="APPLE",
+                    symbol="APPLE",
+                    name="Apple",
+                    market=Market.US,
+                )
+            ],
+            provider=provider,
+        )
+
+        self.assertEqual(provider.requested_codes[0], "AAPL")
+        self.assertEqual(rows[0].code, "AAPL")
+
+    def test_holding_summary_includes_profit_loss(self):
+        provider = FakeProvider("600519")
+        rows = analyze_watchlist_items(
+            [
+                HoldingItem(
+                    code="600519",
+                    symbol="600519",
+                    name="测试股票",
+                    market=Market.A_SHARE,
+                    quantity=10,
+                    cost_price=90,
+                )
+            ],
+            provider=provider,
+        )
+
+        self.assertIsNotNone(rows[0].market_value)
+        self.assertIsNotNone(rows[0].profit_loss)
 
 
 class TestInsufficientKlines(unittest.TestCase):

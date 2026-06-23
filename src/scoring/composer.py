@@ -6,6 +6,7 @@ from src.analyzers.value_analyzer import ValueResult
 from src.analyzers.bollinger_analyzer import BollingerResult
 from src.analyzers.fibonacci_analyzer import FibonacciResult
 from src.analyzers.price_action_analyzer import PriceActionResult
+from src.types import OptionAnalysisResult
 
 
 @dataclass
@@ -22,8 +23,10 @@ class CompositeResult:
     signal_conflicts: List[str] = field(default_factory=list)
 
 
-def _normalized_weights(weights: Dict[str, float]) -> Dict[str, float]:
-    keys = ("value", "bollinger", "fibonacci", "price_action")
+def _normalized_weights(weights: Dict[str, float], include_options: bool = False) -> Dict[str, float]:
+    keys = ["value", "bollinger", "fibonacci", "price_action"]
+    if include_options:
+        keys.append("options")
     cleaned = {k: max(0.0, float(weights.get(k, 0.0))) for k in keys}
     total = sum(cleaned.values())
     if total <= 0:
@@ -44,6 +47,7 @@ def _find_conflicts(
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
     price_action_result: PriceActionResult,
+    option_result: OptionAnalysisResult | None = None,
 ) -> List[str]:
     conflicts: List[str] = []
     v_score = float(value_result.score)
@@ -73,6 +77,12 @@ def _find_conflicts(
         _confidence(price_action_result),
     ) < 0.5:
         conflicts.append("至少一个分析维度数据置信度偏低")
+    if option_result is not None and option_result.available:
+        option_score = float(option_result.score)
+        if option_score <= 40 and p_score >= 60:
+            conflicts.append("正股技术面偏强，但期权市场避险或波动信号偏高")
+        if option_score >= 65 and (b_score <= 40 or p_score <= 40):
+            conflicts.append("期权情绪偏积极，但正股技术结构尚未确认")
 
     return conflicts
 
@@ -82,33 +92,39 @@ def compose(
     bollinger_result: BollingerResult,
     fibonacci_result: FibonacciResult,
     price_action_result: PriceActionResult,
+    option_result: OptionAnalysisResult | None = None,
 ) -> CompositeResult:
-    weights = _normalized_weights(dict(config.SCORE_WEIGHTS))
+    include_options = bool(option_result is not None and option_result.available)
+    weights = _normalized_weights(dict(config.SCORE_WEIGHTS), include_options=include_options)
     w_value = float(weights.get("value", 0.0))
     w_bollinger = float(weights.get("bollinger", 0.0))
     w_fibonacci = float(weights.get("fibonacci", 0.0))
     w_price_action = float(weights.get("price_action", 0.0))
+    w_options = float(weights.get("options", 0.0))
 
     v_score = float(value_result.score)
     b_score = float(bollinger_result.score)
     f_score = float(fibonacci_result.score)
     p_score = float(price_action_result.score)
+    o_score = float(option_result.score) if option_result is not None and option_result.available else 0.0
 
     raw = (
         v_score * w_value
         + b_score * w_bollinger
         + f_score * w_fibonacci
         + p_score * w_price_action
+        + o_score * w_options
     )
     score = max(0.0, min(100.0, raw))
     score = round(score)
 
-    conflicts = _find_conflicts(value_result, bollinger_result, fibonacci_result, price_action_result)
+    conflicts = _find_conflicts(value_result, bollinger_result, fibonacci_result, price_action_result, option_result)
     confidence = (
         _confidence(value_result) * w_value
         + _confidence(bollinger_result) * w_bollinger
         + _confidence(fibonacci_result) * w_fibonacci
         + _confidence(price_action_result) * w_price_action
+        + (_confidence(option_result) * w_options if include_options else 0.0)
     )
     if conflicts:
         confidence *= max(0.65, 1 - 0.1 * len(conflicts))
@@ -148,7 +164,10 @@ def compose(
         "bollinger": b_score,
         "fibonacci": f_score,
         "price_action": p_score,
+        "options": o_score,
     }
+    if not include_options:
+        weights["options"] = 0.0
 
     return CompositeResult(
         score=score,
